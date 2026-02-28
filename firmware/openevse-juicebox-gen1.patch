@@ -1,0 +1,301 @@
+diff --git a/firmware/open_evse/Gfi.cpp b/firmware/open_evse/Gfi.cpp
+index 470f2ab..455dee9 100644
+--- a/firmware/open_evse/Gfi.cpp
++++ b/firmware/open_evse/Gfi.cpp
+@@ -31,6 +31,13 @@ void gfi_isr()
+ void Gfi::Init(uint8_t v6)
+ {
+   pin.init(GFI_REG,GFI_IDX,DigitalPin::INP);
++
++#ifdef GFI_LATCH_RESET
++  pinMode(GFI_LATCH_RESET_PIN, OUTPUT);
++  digitalWrite(GFI_LATCH_RESET_PIN, HIGH);
++  ResetLatch();
++#endif
++
+   // GFI triggers on rising edge
+   attachInterrupt(GFI_INTERRUPT,gfi_isr,RISING);
+ 
+@@ -55,6 +62,10 @@ void Gfi::Reset()
+ {
+   WDT_RESET();
+ 
++#ifdef GFI_LATCH_RESET
++  ResetLatch();
++#endif
++
+ #ifdef GFI_SELFTEST
+   testInProgress = 0;
+   testSuccess = 0;
+@@ -69,6 +80,11 @@ void Gfi::Reset()
+ uint8_t Gfi::SelfTest()
+ {
+   int i;
++
++#ifdef GFI_LATCH_RESET
++  ResetLatch();
++#endif
++
+   // wait for GFI pin to clear
+   for (i=0;i < 20;i++) {
+     WDT_RESET();
+@@ -109,4 +125,16 @@ uint8_t Gfi::SelfTest()
+   return !testSuccess;
+ }
+ #endif // GFI_SELFTEST
++
++#ifdef GFI_LATCH_RESET
++void Gfi::ResetLatch()
++{
++  WDT_RESET();
++  digitalWrite(GFI_LATCH_RESET_PIN, LOW);
++  delay(100);
++  digitalWrite(GFI_LATCH_RESET_PIN, HIGH);
++  delay(10);
++}
++#endif // GFI_LATCH_RESET
++
+ #endif // GFI
+diff --git a/firmware/open_evse/Gfi.h b/firmware/open_evse/Gfi.h
+index c3bcd2c..4b6d7ec 100644
+--- a/firmware/open_evse/Gfi.h
++++ b/firmware/open_evse/Gfi.h
+@@ -46,4 +46,7 @@ public:
+   uint8_t SelfTestSuccess() { return testSuccess; }
+   uint8_t SelfTestInProgress() { return testInProgress; }
+ #endif
++#ifdef GFI_LATCH_RESET
++  void ResetLatch();
++#endif
+ };
+diff --git a/firmware/open_evse/J1772EvseController.cpp b/firmware/open_evse/J1772EvseController.cpp
+index cc971c0..3f7a043 100644
+--- a/firmware/open_evse/J1772EvseController.cpp
++++ b/firmware/open_evse/J1772EvseController.cpp
+@@ -26,8 +26,14 @@ long g_CycleHalfStart;
+ uint8_t g_CycleState;
+ #endif
+ 
++#ifdef JUICEBOX_GEN1
++// JuiceBox Gen 1: 100k/27k pilot voltage divider (ratio 0.2126)
++//                                               A/B B/C C/D D DS
++THRESH_DATA J1772EVSEController::m_ThreshData = {456,326,196,0,130};
++#else
+ //                                               A/B B/C C/D D DS
+ THRESH_DATA J1772EVSEController::m_ThreshData = {875,780,690,0,260};
++#endif
+ 
+ J1772EVSEController g_EvseController;
+ 
+@@ -2238,11 +2244,13 @@ int J1772EVSEController::GetHearbeatTrigger() {
+ #if defined(GFI) || defined(ADVPWR)
+ unsigned long J1772EVSEController::GetResetMs()
+ {
+-#ifdef GFI
++#if defined(GFI) && defined(ADVPWR)
+   return GFI_TIMEOUT - (millis() - ((m_EvseState == EVSE_STATE_GFCI_FAULT) ? m_GfiFaultStartMs : m_NoGndStart));
++#elif defined(GFI)
++  return GFI_TIMEOUT - (millis() - m_GfiFaultStartMs);
+ #else
+   return GFI_TIMEOUT - (millis() - m_NoGndStart);
+-#endif // GFI
++#endif
+ }
+ #endif // GFI || ADVPWR
+ 
+diff --git a/firmware/open_evse/open_evse.h b/firmware/open_evse/open_evse.h
+index ffecb5b..ecb007c 100644
+--- a/firmware/open_evse/open_evse.h
++++ b/firmware/open_evse/open_evse.h
+@@ -181,7 +181,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ //    disabled, will retry POST continuously until it passes
+ // 2) if enabled, any a fault occurs immediately after charge is initiated,
+ //    hard fault until power cycled. Otherwise, do the standard delay/retry sequence
++#ifndef JUICEBOX_GEN1
+ #define UL_COMPLIANT
++#endif
+ 
+ #ifdef UL_COMPLIANT
+ #define ADVPWR
+@@ -191,9 +193,13 @@ extern AutoCurrentCapacityController g_ACCController;
+ #define GFI_SELFTEST
+ #endif //UL_COMPLIANT
+ 
++#ifndef JUICEBOX_GEN1
+ #define TEMPERATURE_MONITORING  // Temperature monitoring support
++#endif
+ 
++#ifndef JUICEBOX_GEN1
+ #define HEARTBEAT_SUPERVISION // Heartbeat Supervision support
++#endif
+ 
+ #ifdef AMMETER
+ 
+@@ -230,7 +236,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ #endif //AMMETER
+ 
+ //Adafruit RGBLCD (MCP23017) - can have RGB or monochrome backlight
++#ifndef JUICEBOX_GEN1
+ #define RGBLCD
++#endif
+ 
+ //select default LCD backlight mode. can be overridden w/CLI/RAPI
+ #define BKL_TYPE_MONO 0
+@@ -251,7 +259,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ #endif // I2CLCD_PCF8574
+ 
+ // Advanced Powersupply... Ground check, stuck relay, L1/L2 detection.
++#ifndef JUICEBOX_GEN1
+ #define ADVPWR
++#endif
+ 
+ // single button menus (needs LCD enabled)
+ // connect an SPST-NO button between pin defined by BTN_REG/BTN_IDX and GND or enable ADAFRUIT_BTN to use the
+@@ -259,7 +269,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ // How to use 1-button menu
+ // Long press activates menu
+ // When within menus, short press cycles menu items, long press selects and exits current submenu
++#ifndef JUICEBOX_GEN1
+ #define BTN_MENU
++#endif
+ 
+ // take out basic setup stuff that the user really shouldn't be changing,
+ // which can be set via RAPI/WiFi module.. reclaims a lot of code space
+@@ -278,7 +290,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ 
+ // Option for RTC and DelayTime
+ // REQUIRES HARDWARE RTC: DS1307 or DS3231 connected via I2C
++#ifndef JUICEBOX_GEN1
+ #define RTC // enable RTC & timer functions
++#endif
+ 
+ #ifdef RTC
+ // Option for Delay Timer - GoldServe
+@@ -347,7 +361,9 @@ extern AutoCurrentCapacityController g_ACCController;
+ #define DEFAULT_RELAY_HOLD_PWM 255 // (0-255, where 0=0%, 255=100%
+ // enables RAPI $Z0 for tuning PWM (see rapi_proc.h for $Z0 syntax)
+ // PWM parameters written to/loaded from EEPROM
++#ifdef RELAY_PWM
+ #define RELAY_HOLD_DELAY_TUNING // enable Z0
++#endif
+ 
+ //-- end features
+ 
+@@ -460,6 +476,31 @@ extern AutoCurrentCapacityController g_ACCController;
+ 
+ //J1772EVSEController
+ 
++#ifdef JUICEBOX_GEN1
++// OpenJuice — JuiceBox Gen 1 pin mapping (firmware-only remap)
++// ADC pins
++#define CURRENT_PIN 2      // CT sense on ADC2/A2
++#define PILOT_PIN 0        // pilot sense on ADC0/A0
++#define VOLTMETER_PIN 1    // voltage divider on ADC1/A1
++// Pilot PWM - OC1A on PB1/D9
++#define PILOT_REG &PINB
++#define PILOT_IDX 1
++// Relay - single relay on PD5/D5
++#define CHARGING_REG &PORTD
++#define CHARGING_IDX 5
++// Voltmeter calibration
++#ifndef DEFAULT_VOLT_SCALE_FACTOR
++#define DEFAULT_VOLT_SCALE_FACTOR 120
++#endif
++#ifndef DEFAULT_VOLT_OFFSET
++#define DEFAULT_VOLT_OFFSET 0
++#endif
++#ifndef VOLTMETER_POLL_INTERVAL
++#define VOLTMETER_POLL_INTERVAL 35
++#endif
++
++#else // !JUICEBOX_GEN1 — standard OpenEVSE pin mapping
++
+ #define CURRENT_PIN 0 // analog current reading pin ADCx
+ #define PILOT_PIN 1 // analog pilot voltage reading pin ADCx
+ #define PP_PIN 2 // PP_READ - ADC2
+@@ -513,6 +554,8 @@ extern AutoCurrentCapacityController g_ACCController;
+ #define PILOT_REG &PINB
+ #define PILOT_IDX 2
+ 
++#endif // JUICEBOX_GEN1
++
+ #ifdef MENNEKES_LOCK
+ // requires external 12V H-bridge driver such as Polulu 1451
+ 
+@@ -605,6 +648,18 @@ extern AutoCurrentCapacityController g_ACCController;
+ #define V6_ID_IDX 7
+ 
+ #ifdef GFI
++#ifdef JUICEBOX_GEN1
++#define GFI_INTERRUPT 1 // INT1 on PD3/D3
++#define GFI_REG &PIND
++#define GFI_IDX 3
++#ifdef GFI_SELFTEST
++#define GFITEST_REG &PINB
++#define GFITEST_IDX 4  // PB4/D12
++#endif // GFI_SELFTEST
++#ifdef GFI_LATCH_RESET
++#define GFI_LATCH_RESET_PIN 7 // PD7 - active LOW pulse to clear hardware latch
++#endif // GFI_LATCH_RESET
++#else // !JUICEBOX_GEN1
+ #define GFI_INTERRUPT 0 // interrupt number 0 = PD2, 1 = PD3
+ // interrupt number 0 = PD2, 1 = PD3
+ #define GFI_REG &PIND
+@@ -617,9 +672,10 @@ extern AutoCurrentCapacityController g_ACCController;
+ // V6 GFI test pin PB0
+ #define V6_GFITEST_REG &PINB
+ #define V6_GFITEST_IDX 0
++#endif
++#endif // !JUICEBOX_GEN1
+ 
+-
+-
++#ifdef GFI_SELFTEST
+ #define GFI_TEST_CYCLES 60
+ // GFI pulse should be 50% duty cycle
+ #define GFI_PULSE_ON_US 8333 // 1/2 of roughly 60 Hz.
+@@ -707,11 +763,13 @@ extern AutoCurrentCapacityController g_ACCController;
+ // NOTE: setting DEFAULT_CURRENT_SCALE_FACTOR TO 0 will disable the ammeter
+ // until it is overridden via RAPI
+ //#define DEFAULT_CURRENT_SCALE_FACTOR 220   // Craig K, average of three OpenEVSE controller calibrations
++#ifndef DEFAULT_CURRENT_SCALE_FACTOR
+ #ifdef OPENEVSE_2
+ #define DEFAULT_CURRENT_SCALE_FACTOR 186   // OpenEVSE II with a 27 Ohm burden resistor, after a 2-point calibration at 12.5A and 50A
+ #else
+ #define DEFAULT_CURRENT_SCALE_FACTOR 220   // OpenEVSE v2.5 and v3 with a 22 Ohm burden resistor (note that the schematic may say 28 Ohms by mistake)
+ #endif
++#endif // DEFAULT_CURRENT_SCALE_FACTOR
+ 
+ // subtract this from ammeter current reading to correct zero offset
+ #ifdef OPENEVSE_2
+diff --git a/platformio.ini b/platformio.ini
+index 744363f..bf22897 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -107,3 +107,26 @@ build_src_flags=
+ ;   -D PP_AUTO_AMPACITY
+ ;   -D THREEPHASE
+ ;   -D 'VERSION="${common.version}.3P"'
++
++# OpenJuice - JuiceBox Gen 1 EVSE with OpenEVSE firmware
++# Firmware-only pin remap, no hardware modifications
++[env:juicebox_gen1]
++platform = atmelavr
++board = pro16MHzatmega328
++framework = arduino
++upload_protocol = usbasp
++upload_flags = "-e -B0.5"
++build_src_flags =
++  -D JUICEBOX_GEN1
++  -D AMMETER
++  -D VOLTMETER
++  -D RAPI
++  -D RAPI_SERIAL
++  -D GFI_LATCH_RESET
++  -D NO_AUTOSVCLEVEL
++  -D DEFAULT_SERVICE_LEVEL=2
++  -D DEFAULT_CURRENT_CAPACITY_L2=30
++  -D MAX_CURRENT_CAPACITY_L2=40
++  -D DEFAULT_CURRENT_SCALE_FACTOR=90
++  -D SERIAL_BAUD=115200
++  -D 'VERSION="${common.version}.OJ"'
