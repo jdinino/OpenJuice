@@ -95,7 +95,7 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 | EEPROM | 1 KB |
 | Operating Voltage | 5V |
 | Package | TQFP-32 (on JuiceBox board) |
-| Bootloader | None (ISP programmed) |
+| Bootloader | Optiboot (likely) — eMotorWerks used FTDI serial for firmware updates |
 
 ### 2.3 WiFi Module (Not Modified)
 
@@ -460,18 +460,142 @@ pio run -e juicebox_gen1 -t clean
 | R4 | EEPROM contains old JuiceBox data — erratic behavior | Medium | High | Chip erase (`-e`) during flash clears EEPROM |
 | R5 | ISP conflicts with GFI test pin (D12/MISO) | Low | Medium | GFI test only active during self-test; ISP only during programming |
 | R6 | Relay pin D5 conflicts with Timer0 OC0B | Low | Low | OpenEVSE doesn't use Timer0 OC0B for relay — uses direct GPIO |
-| R7 | WiFi module SoftSerial interrupts interfere | Low | Low | WiFi module is independent; D2/D4 not used by OpenEVSE |
+| R7 | WiFi module SoftSerial interrupts interfere | Low | Low | WiFi module is independent; D2/D4 not used in v0.1 (used in v0.2) |
 
 ---
 
-## 9. Future Enhancements (Out of Scope for v0.1)
+## 9. v0.2 — WiFi RAPI Tunneling via AMW006
 
-- **WiFi integration:** Bridge RAPI commands through AMW006 WiFi module to enable remote control
+### 9.1 Overview
+
+The AMW006 WiFi module is already configured in **stream mode**, which transparently bridges its UART0 to TCP network connections. By adding a SoftwareSerial RAPI channel on D2/D4, any WiFi client can send RAPI commands to the ATmega328P without any changes to the AMW006 firmware.
+
+**No ZAP protocol is needed.** The original eMotorWerks ZAP protocol was proprietary and cloud-dependent. Instead, we tunnel standard RAPI commands through the AMW006's existing stream mode — the WiFi module acts as a dumb serial-to-WiFi bridge.
+
+### 9.2 Architecture
+
+```
+WiFi Client (phone/laptop/HA)
+        │
+        ▼ TCP connection
+┌──────────────┐
+│   AMW006     │  stream mode: TCP ↔ UART0 transparent bridge
+│   WiFi       │  IP: 192.168.x.x, port 2000 (default)
+│   Module     │
+└──────┬───────┘
+       │ UART0 at 9600 baud (8N1)
+       ▼
+┌──────────────┐
+│ ATmega328P   │  SoftwareSerial RX=D2, TX=D4
+│ OpenJuice    │  New: EvseSoftSerialRapiProcessor
+│ Firmware     │  Existing: EvseSerialRapiProcessor on D0/D1 (115200)
+└──────────────┘
+```
+
+Both RAPI channels run simultaneously — local USB serial (D0/D1 at 115200) and WiFi (D2/D4 at 9600).
+
+### 9.3 Implementation
+
+OpenEVSE's RAPI architecture already supports multiple concurrent channels via subclasses of `EvseRapiProcessor`:
+
+| Channel | Class | Transport | Status |
+|---|---|---|---|
+| Hardware UART | `EvseSerialRapiProcessor` | `Serial` on D0/D1 at 115200 | v0.1 (done) |
+| I2C | `EvseI2cRapiProcessor` | `Wire` | Exists upstream (not used) |
+| **SoftwareSerial** | **`EvseSoftSerialRapiProcessor`** | **`SoftwareSerial` on D2/D4 at 9600** | **v0.2 (new)** |
+
+New class in `rapi_proc.h`:
+
+```cpp
+#ifdef RAPI_SOFTSERIAL
+#include <SoftwareSerial.h>
+class EvseSoftSerialRapiProcessor : public EvseRapiProcessor {
+  SoftwareSerial &m_ss;
+  int available() { return m_ss.available(); }
+  int read() { return m_ss.read(); }
+  int write(uint8_t u8) { return m_ss.write(u8); }
+  int write(const char *str) { return m_ss.write(str); }
+public:
+  EvseSoftSerialRapiProcessor(SoftwareSerial &ss);
+  void init();
+};
+extern EvseSoftSerialRapiProcessor g_ESSRP;
+#endif
+```
+
+Integration points in `rapi_proc.cpp` — add `g_ESSRP` calls alongside existing `g_ESRP` and `g_EIRP` in:
+- `RapiInit()` — initialize SoftwareSerial at 9600 baud
+- `RapiDoCmd()` — process incoming commands from WiFi
+- `RapiSendEvseState()` — push state changes to WiFi clients
+- `RapiSendBootNotification()` — notify WiFi on boot
+- `RapiSetWifiMode()` — forward WiFi mode changes
+
+### 9.4 AMW006 Configuration (No Changes Needed)
+
+The AMW006 is already configured correctly:
+
+```
+bus.mode: stream              ← transparent serial↔network bridge
+bus.data_bus: uart0           ← UART0 is the data channel
+uart.baud: uart0:9600         ← matches SoftwareSerial baud rate
+bus.stream.cmd_seq: $$$       ← escape to command mode (3 sec idle + $$$)
+bus.stream.flush_time: 100    ← 100ms flush interval
+```
+
+WiFi clients connect via TCP to the AMW006's IP address. Data sent over TCP is forwarded to UART0, which connects to D2/D4 on the ATmega328P.
+
+### 9.5 Build Flags (v0.2)
+
+```ini
+build_src_flags =
+  ... (all v0.1 flags) ...
+  -D RAPI_SOFTSERIAL
+  -D RAPI_SOFTSERIAL_RX=2
+  -D RAPI_SOFTSERIAL_TX=4
+  -D RAPI_SOFTSERIAL_BAUD=9600
+```
+
+### 9.6 Usage
+
+```bash
+# From any device on the same WiFi network:
+# Connect via TCP (e.g., netcat, PuTTY raw mode, or custom app)
+nc 192.168.1.18 2000
+
+# Send RAPI commands as plain text:
+$GV          # get firmware version
+$GS          # get EVSE state
+$GG          # get current and voltage
+$SC 24       # set current capacity to 24A
+$FE          # enable charging
+$FD          # disable charging
+```
+
+### 9.7 Risks
+
+| # | Risk | Severity | Mitigation |
+|---|---|---|---|
+| W1 | SoftwareSerial interrupts interfere with pilot PWM timing | Medium | Test with scope; SoftwareSerial at 9600 has short ISRs |
+| W2 | Flash/RAM overhead of SoftwareSerial library | Low | SoftwareSerial adds ~1.5KB flash, ~70 bytes RAM; v0.1 uses 40.5% flash |
+| W3 | AMW006 stream mode TCP port unknown | Low | Default is port 2000; verify with `get tcp.server.port` via Marlin board |
+| W4 | No authentication on TCP connection | Medium | AMW006 is on local WiFi only; add `http.server.password` if needed |
+
+### 9.8 Prerequisites
+
+- v0.1 firmware flashed and verified (RAPI working on D0/D1)
+- AMW006 connected to local WiFi (already configured: SSID "Ellen")
+- AMW006 stream mode active (already configured)
+
+---
+
+## 10. Future Enhancements (Out of Scope for v0.1 and v0.2)
+
 - **MQTT support:** Expose RAPI data via MQTT through the WiFi module
-- **Web UI:** Serve a local configuration page from the AMW006
+- **Web UI:** Serve a local configuration page from the AMW006's HTTP server
 - **Energy metering:** Accumulate kWh from current/voltage readings
 - **Scheduled charging:** Time-based charge windows via RAPI or WiFi
-- **OpenEVSE WiFi module replacement:** Swap AMW006 for ESP32 running OpenEVSE WiFi firmware
+- **Home Assistant integration:** MQTT discovery for auto-configuration
+- **OpenEVSE WiFi module replacement:** Swap AMW006 for ESP32 running OpenEVSE WiFi firmware (full web UI, MQTT, OCPP out of the box)
 
 ---
 
