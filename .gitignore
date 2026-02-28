@@ -1,0 +1,25 @@
+# Build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Secrets
+*.pem
+*.key
+credentials*
