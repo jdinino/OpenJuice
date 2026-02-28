@@ -42,7 +42,6 @@ pio run -e juicebox_gen1 -t upload
 
 - [Functional Specification (FSD)](docs/FSD.md)
 - [Datasheets & References](datasheets/SOURCES.md)
-- [AI Agents for Development](docs/AI_AGENTS.md)
 
 ## Status
 
