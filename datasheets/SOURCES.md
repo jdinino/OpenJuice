@@ -3,7 +3,7 @@
 Reference URLs for all key components and related projects used in the OpenJuice project
 (porting OpenEVSE firmware to JuiceBox Gen 1 EVSE hardware).
 
-Last updated: 2026-02-27
+Last updated: 2026-07-14
 
 ---
 
@@ -148,6 +148,7 @@ Pin 5: RESET    Pin 6: GND
 | 7b3 | Juice Rescue Survey and Review (Jan 2025) | https://juice-rescue.org/2025-01-juice-rescue-review-and-survey | Community survey results and project status overview | Yes |
 | 7b4 | Juice Rescue FTC Letter | https://juice-rescue.org/documents/2024-10-10-Juicebox-letter-to-FTC.pdf | Letter sent to the FTC about Enel X's abandonment of JuiceBox customers | Yes |
 | 7b5 | Reverse-Engineering the Enel X Way API | https://gist.github.com/tomayac/754284dd79e20147f482d932ed89f2a1 | GitHub Gist documenting reverse engineering of the Enel X Way cloud API | Yes |
+| 7b6 | JuiceRescue/juicepassproxy | https://github.com/JuiceRescue/juicepassproxy | MITM UDP→MQTT proxy for JuiceBox telemetry, auto-discoverable by Home Assistant; can redirect the charger off Enel X servers to a local proxy. Directly relevant to the UDP 55555 beacon work below. | Yes |
 
 ### 7c. Blog Posts and Teardowns
 
@@ -169,6 +170,39 @@ Pin 5: RESET    Pin 6: GND
 | 7d3 | Open Source EVSEs: OpenEVSE vs JuiceBox | https://mynissanleaf.com/threads/open-source-evses-openevse-vs-juicebox.13556/ | Comparison thread between OpenEVSE and JuiceBox hardware/firmware approaches | Yes |
 | 7d4 | Retrofitting a JuiceBox (OpenEVSE Support) | https://openev.freshdesk.com/support/discussions/topics/6000059068 | Support thread about retrofitting JuiceBox hardware with OpenEVSE controller | Yes |
 | 7d5 | Arduino EVSE Pilot Signal ADC (Arduino Forum) | https://forum.arduino.cc/t/arduino-evse-pilot-signal-adc/1033540 | Technical discussion of reading J1772 pilot signal voltages with ATmega328P ADC | Yes |
+
+---
+
+## 8. Gecko OS / ZentriOS Modules & Related Cloud-Tethered Devices
+
+The JuiceBox AMW006 runs ZentriOS-WZ (successor line: Gecko OS). The same OS family
+powers the Generac Mobile Link Tether (WGM160P). These modules share the UDP 55555
+LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on.
+
+### 8a. Primary reverse-engineering artifacts (this repo)
+
+| # | Name | Path | Description | Free |
+|---|------|------|-------------|------|
+| 8a1 | ZentriOS/Gecko OS LAN Discovery Beacon | [../docs/ZentriOS-Gecko-LAN-Discovery.md](../docs/ZentriOS-Gecko-LAN-Discovery.md) | UDP 55555 JSON beacon spec, port 2000, capture method — verified on live JuiceBox + Generac hardware | Yes |
+| 8a2 | Generac Mobile Link Tether RE Notes | [../docs/Generac-MobileLink-Tether-RE.md](../docs/Generac-MobileLink-Tether-RE.md) | Gecko OS provisioning API, locked local surface, cloud REST/B2C map — sister case to the JuiceBox | Yes |
+| 8a3 | RE tools (stdlib Python) | [../tools/](../tools/) | Beacon/pcap decoders + Gecko OS provisioning client; `beacon_extract.py` decodes JuiceBox and Generac beacons | Yes |
+
+### 8b. Silicon Labs Gecko OS / WGM160P (portal)
+
+| # | Name | URL | Description | Free |
+|---|------|-----|-------------|------|
+| 8b1 | Silicon Labs Documentation Portal | https://docs.silabs.com | Search "Gecko OS" for the command/variable reference (successor to Zentri docs). Deep links move between releases — search rather than bookmark. | Yes |
+| 8b2 | Silicon Labs Wi-Fi Modules | https://www.silabs.com/wireless/wi-fi | Landing page for Wi-Fi modules; search "WGM160P" for the Gecko-OS-capable module used in the Generac Tether | Yes |
+
+### 8c. Generac Mobile Link (context — cloud-tethered counterpart)
+
+| # | Name | URL | Description | Free |
+|---|------|-----|-------------|------|
+| 8c1 | Generac Mobile Link | https://www.generac.com/all-products/accessories/product-accessories/mobile-link | Product page for the Mobile Link connectivity accessory family (the "Tether") | Yes |
+
+> The WGM160P/Gecko OS silabs links are portal-level: exact document URLs were not
+> pinned here because Silicon Labs' deep links shift across firmware releases (several
+> candidate URLs returned 404 during verification on 2026-07-14). Use the portal search.
 
 ---
 

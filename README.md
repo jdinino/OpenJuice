@@ -40,8 +40,17 @@ pio run -e juicebox_gen1 -t upload
 
 ## Documentation
 
-- [Functional Specification (FSD)](docs/FSD.md)
+- [Functional Specification (FSD)](docs/OpenJuice-FSD.md)
 - [Datasheets & References](datasheets/SOURCES.md)
+
+### Related reverse engineering (Zentri / Gecko OS family)
+
+The JuiceBox's AMW006 WiFi module and its ZentriOS/Gecko OS relatives share a
+common LAN discovery protocol and a stream-mode port that OpenJuice v0.2 relies on:
+
+- [ZentriOS/Gecko OS LAN Discovery Beacon & Local Protocols](docs/ZentriOS-Gecko-LAN-Discovery.md) — the UDP 55555 JSON beacon (auto-discovers the JuiceBox IP for v0.2), port 2000, and how to capture it. Verified on live JuiceBox + Generac hardware.
+- [Generac Mobile Link Tether — RE Notes](docs/Generac-MobileLink-Tether-RE.md) — a sister cloud-tethered device on the same OS family (Gecko OS / WGM160P): provisioning protocol, locked-down local surface, and cloud API. A cautionary counterpoint to the recoverable JuiceBox.
+- [tools/](tools/) — pure-Python (stdlib-only) beacon/pcap decoders and a Gecko OS provisioning client. `beacon_extract.py` decodes JuiceBox *and* Generac beacons.
 
 ## Status
 
