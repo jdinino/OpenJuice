@@ -200,6 +200,27 @@ LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on
 |---|------|-----|-------------|------|
 | 8c1 | Generac Mobile Link | https://www.generac.com/all-products/accessories/product-accessories/mobile-link | Product page for the Mobile Link connectivity accessory family (the "Tether") | Yes |
 
+### 8d. Mobile Link Android App (reverse-engineering target)
+
+| # | Name | URL | Description | Free |
+|---|------|-----|-------------|------|
+| 8d1 | Mobile Link for Generators (APKPure) | https://apkpure.com/mobile-link-for-generators/com.generac.standbystatus | APKPure listing; package `com.generac.standbystatus`. Source of the analyzed APK. | Yes |
+| 8d2 | Google Play listing | https://play.google.com/store/apps/details?id=com.generac.standbystatus | Official Play Store page | Yes |
+
+**Analyzed build fingerprint — v3.16.0** (referenced instead of hosting the ~143 MB proprietary binary; re-download from 8d1 and verify):
+
+| Property | Value |
+|---|---|
+| File | `Mobile+Link+for+Generators_3.16.0_APKPure.apk` |
+| Size | 142,712,707 bytes |
+| SHA-256 | `1fcf74960189332508e7c0e818fa7ec6c791fdecf98cf82d3f78727bbe2cdd93` |
+| Source | APKPure — `com.generac.standbystatus` v3.16.0 |
+| Framework | React Native / Hermes bytecode; bundle at `assets/index.android.bundle` (9,002,548 bytes, magic `c61fbc03…`) |
+| Cleartext rule | Network Security Config `res/8G.xml` permits HTTP only to `192.168.51.1` |
+| Endpoints present | SoftAP V2 provisioning + `app.mobilelinkgen.com` cloud/B2C — see [../docs/Generac-MobileLink-Tether-RE.md](../docs/Generac-MobileLink-Tether-RE.md) |
+
+> Verify a fresh download with `sha256sum <file>` (Linux) or `Get-FileHash <file>` (PowerShell). APKPure may repackage across snapshots — a size/hash mismatch means a different build, not the one analyzed here.
+
 > The WGM160P/Gecko OS silabs links are portal-level: exact document URLs were not
 > pinned here because Silicon Labs' deep links shift across firmware releases (several
 > candidate URLs returned 404 during verification on 2026-07-14). Use the portal search.
