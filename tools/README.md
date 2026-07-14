@@ -20,6 +20,26 @@ so `beacon_extract.py` decodes either.
 | **`mdns_dump.py`** | Decode mDNS (UDP 5353) records a device emits — reveals whether it advertises any local service/port (PTR/SRV/TXT) or just claims a hostname. |
 | **`generac_provision.py`** | Full SoftAP provisioning client for the Generac Tether V2 API (`192.168.51.1`): `probe`, `scan`, `dump`, `connect`, `portscan`, `listen-udp`. Implements the `wifi_enable`-first join sequence (see Generac RE doc §3). |
 
+### APK / firmware analysis (stdlib zip parsing — used to build the [App Lineage](../docs/MobileLink-App-Lineage.md) doc)
+
+These take an APK path as `argv[1]`. They detect the app framework and mine
+endpoints across the three Mobile Link generations (native / Xamarin / React Native).
+
+| Script | What it does |
+|---|---|
+| **`analyze_apk.py`** | Framework detection (native vs React-Native-JSC vs React-Native-Hermes vs Xamarin) + a marker matrix showing which component (bundle/dex/res) contains each provisioning/cloud string. |
+| **`extract_native.py`** | String-mine `classes*.dex`, `resources.arsc`, `assets/`, and Xamarin `assemblies/` for URLs, IPs, API paths, and provisioning/controller keywords. |
+| **`list_entries.py`** | Locate Xamarin .NET assemblies and detect how they're stored (plain PE `MZ` / LZ4 `XALZ` / assembly-store `XABA` blob). |
+| **`find_config.py`** | Dump the config block (and URL key/value pairs) from the entry containing a given marker, e.g. `LegacyGainspanApi`. |
+| **`extract_dll_endpoints.py`** | Pull endpoint paths + provisioning method/type names from Generac `.NET` assemblies (recovers the V1 GainSpan API surface). |
+| **`verify_apk.py`** | Confirm a downloaded APK matches an analyzed build (size, SHA-256, bundle magic, endpoint markers). |
+
+```sh
+python analyze_apk.py "Mobile Link ....apk"
+python extract_native.py "Mobile Link ....apk"
+python find_config.py "Mobile Link Setup ....apk" LegacyGainspanApi
+```
+
 ## Usage
 
 ```sh

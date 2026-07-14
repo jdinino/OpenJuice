@@ -219,6 +219,16 @@ LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on
 | Cleartext rule | Network Security Config `res/8G.xml` permits HTTP only to `192.168.51.1` |
 | Endpoints present | SoftAP V2 provisioning + `app.mobilelinkgen.com` cloud/B2C — see [../docs/Generac-MobileLink-Tether-RE.md](../docs/Generac-MobileLink-Tether-RE.md) |
 
+**Legacy generations analyzed** — full history in [../docs/MobileLink-App-Lineage.md](../docs/MobileLink-App-Lineage.md):
+
+| Version | File | Size (bytes) | SHA-256 | Framework / provisioning |
+|---|---|---|---|---|
+| 1.0.2707 | `Mobile+Link+Setup_1.0.2707_APKPure.apk` | 31,045,475 | `d1059eea00bfdaa3340995bf1beaa7e8d38b5a065375d887a4d3f04f47e7cfeb` | Xamarin.Forms — **V1 GainSpan** |
+| 2.28.0.47091 | `Mobile+Link+for+Generators_2.28.0.47091_APKPure.apk` | 48,153,959 | `d3b0f04db48c44c46888d3354fc5f7e454d87b5f6b84d8c73ee4474535b7206e` | Xamarin (.NET assembly-store) — V1→V2 |
+| 3.16.0 | *(fingerprint above)* | 142,712,707 | `1fcf7496…be2cdd93` | React Native / Hermes — V2 |
+
+> v1.0.2707 is a **separate app** — "Mobile Link **Setup**" (`Generac.Applications.Mobile.Installer`), the original installer/provisioning tool — not `com.generac.standbystatus`.
+
 > Verify a fresh download with `sha256sum <file>` (Linux) or `Get-FileHash <file>` (PowerShell). APKPure may repackage across snapshots — a size/hash mismatch means a different build, not the one analyzed here.
 
 > The WGM160P/Gecko OS silabs links are portal-level: exact document URLs were not

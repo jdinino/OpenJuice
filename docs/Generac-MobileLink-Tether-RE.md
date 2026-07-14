@@ -38,7 +38,7 @@ From the SoftAP config API (`getConfig`, `interface=system`):
 
 ## 3. SoftAP provisioning protocol (V2)
 
-When unprovisioned, the module raises a SoftAP (`G0071700-…` SSID) at **`192.168.51.1`** with an HTTP API. The Android app (`Mobile+Link+for+Generators`, React Native / Hermes bytecode) drives this API. Endpoints:
+When unprovisioned, the module raises a SoftAP (SSID prefixed `MLG…`) at **`192.168.51.1`** with an HTTP API. (`G0071700-8EA`, seen earlier, is the device's DHCP **hostname** on the LAN — not the SoftAP SSID. The `MLG` prefix is used by both the V1 and V2 generations, so it does not indicate version — see [App Lineage](MobileLink-App-Lineage.md).) The Android app (`Mobile+Link+for+Generators`, React Native / Hermes bytecode) drives this API. Endpoints:
 
 | Method | Path | Body / notes |
 |---|---|---|
