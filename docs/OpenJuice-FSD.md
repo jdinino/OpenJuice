@@ -2,7 +2,7 @@
 
 **Project:** OpenJuice (OJ)
 **Version:** 0.1 DRAFT
-**Date:** 2026-02-27
+**Date:** 2026-02-27 (rev. 2026-07-14 — added §9.9 beacon discovery)
 **Author:** OpenJuice Contributors
 
 ---
@@ -558,7 +558,8 @@ build_src_flags =
 ### 9.6 Usage
 
 ```bash
-# From any device on the same WiFi network:
+# From any device on the same WiFi network. The IP + port are obtained from
+# the UDP 55555 discovery beacon (see §9.9); 192.168.1.18 below is illustrative.
 # Connect via TCP (e.g., netcat, PuTTY raw mode, or custom app)
 nc 192.168.1.18 2000
 
@@ -577,7 +578,7 @@ $FD          # disable charging
 |---|---|---|---|
 | W1 | SoftwareSerial interrupts interfere with pilot PWM timing | Medium | Test with scope; SoftwareSerial at 9600 has short ISRs |
 | W2 | Flash/RAM overhead of SoftwareSerial library | Low | SoftwareSerial adds ~1.5KB flash, ~70 bytes RAM; v0.1 uses 40.5% flash |
-| W3 | AMW006 stream mode TCP port unknown | Low | Default is port 2000; verify with `get tcp.server.port` via Marlin board |
+| W3 | ~~AMW006 stream mode TCP port unknown~~ **Resolved** | Low | **Confirmed port 2000** — the live JuiceBox's UDP 55555 beacon advertises `remote_terminal_port: 2000` (§9.9; [discovery doc](ZentriOS-Gecko-LAN-Discovery.md)) |
 | W4 | No authentication on TCP connection | Medium | AMW006 is on local WiFi only; add `http.server.password` if needed |
 
 ### 9.8 Prerequisites
@@ -585,6 +586,61 @@ $FD          # disable charging
 - v0.1 firmware flashed and verified (RAPI working on D0/D1)
 - AMW006 connected to local WiFi (already configured: SSID "Ellen")
 - AMW006 stream mode active (already configured)
+
+### 9.9 Local Discovery & Health Monitoring (UDP 55555 Beacon)
+
+The AMW006 — like all ZentriOS/Gecko OS modules — broadcasts a JSON **discovery beacon on UDP 55555** every ~10 seconds. This removes the need to hardcode the JuiceBox IP (§9.6) and provides a passive health feed **with zero changes to the AMW006 or the ATmega firmware**. Full protocol spec and live captures: [ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md).
+
+Verified beacon from a live JuiceBox Gen 1:
+
+```json
+{"mac":"4C:55:CC:18:1D:09","bssid":"38:94:ED:5E:BE:0F","channel":1,
+ "ip":"192.168.1.62","ssid":"StumpyNet","rssi":-68,
+ "remote_terminal_port":2000,"time":1784058085337,
+ "version":"EMWERK-JB_1_1-1.4.0.28, 2021-04-27T20:39:50Z, ZentriOS-WZ-3.6.4.0",
+ "uuid":"06413041000000001D003F00055136313535 3738"}
+```
+
+#### 9.9.1 Auto-discovery flow
+
+Instead of a hardcoded address, the RAPI client discovers the JuiceBox dynamically and stays correct across DHCP lease changes:
+
+```
+listen UDP 0.0.0.0:55555
+  on datagram:
+    j = json.loads(payload)
+    if "EMWERK-JB" in j["version"]:          # it's a JuiceBox
+        host = j["ip"]                        # current IP, even after DHCP churn
+        port = j["remote_terminal_port"]      # 2000 (the stream tunnel, §9.6)
+        open TCP host:port  →  speak RAPI
+```
+
+The beacon's `remote_terminal_port` is exactly the stream-mode port the RAPI tunnel connects to — discovery and transport line up with no extra configuration. This is what retires risk **W3**.
+
+#### 9.9.2 Health telemetry from the beacon (no firmware change)
+
+The beacon is itself a monitoring feed. A ~30-line UDP listener (see [`tools/beacon_extract.py`](../tools/beacon_extract.py)) can publish these to MQTT alongside the RAPI-tunneled charging data:
+
+| Beacon field | Metric | Home Assistant entity |
+|---|---|---|
+| `ip` present / stale | online / offline | `binary_sensor` |
+| `rssi` | WiFi signal (dBm) | `sensor` |
+| `time` | device clock / coarse uptime | diagnostic |
+| `bssid` | associated AP | roaming diagnostic |
+| `version` | firmware inventory | diagnostic |
+
+Note the beacon clock free-runs and drifts (~0.7 %), so treat `time` as a liveness/rough signal, not an accurate RTC.
+
+#### 9.9.3 Requirements
+
+| ID | Requirement |
+|---|---|
+| D1 | The RAPI client SHALL listen on UDP 55555 and parse JSON beacons |
+| D2 | The client SHALL identify the JuiceBox by `version` containing `EMWERK-JB` |
+| D3 | The client SHALL use the beacon's `ip` + `remote_terminal_port` for the RAPI TCP connection (§9.6) rather than a hardcoded address |
+| D4 | The client MAY publish `rssi` and online-state as diagnostic sensors |
+
+**Constraint:** the beacon is a limited broadcast (`255.255.255.255`), so the listener must sit on the **same L2 segment** as the JuiceBox — or capture on the router/AP bridge (see [discovery doc §5](ZentriOS-Gecko-LAN-Discovery.md#5-capturing-the-beacon-router--ap-side)).
 
 ---
 
