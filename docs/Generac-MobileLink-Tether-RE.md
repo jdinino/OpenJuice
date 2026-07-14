@@ -119,6 +119,8 @@ Searched the decompiled app bundle and string table — there is **no** device r
 
 Deep telemetry flows **device → Azure IoT Hub (MQTT/TLS 8883) → Generac cloud**, and the app reads it back over a REST API. Two ways to obtain the deep metrics, both requiring a one-time **enrollment** of the device to an account:
 
+> The **full** recovered API contract — every route template, the telemetry model, the B2C auth, and the enrollment sequence — is in [MobileLink-Cloud-API.md](MobileLink-Cloud-API.md) (extracted from the 2.x Xamarin `MobileLinkClient`). The summary below is the essentials.
+
 ### 6.1 REST API (`app.mobilelinkgen.com`)
 
 - Base: `https://app.mobilelinkgen.com/api/v5/`

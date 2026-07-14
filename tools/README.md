@@ -33,6 +33,9 @@ endpoints across the three Mobile Link generations (native / Xamarin / React Nat
 | **`find_config.py`** | Dump the config block (and URL key/value pairs) from the entry containing a given marker, e.g. `LegacyGainspanApi`. |
 | **`extract_dll_endpoints.py`** | Pull endpoint paths + provisioning method/type names from Generac `.NET` assemblies (recovers the V1 GainSpan API surface). |
 | **`verify_apk.py`** | Confirm a downloaded APK matches an analyzed build (size, SHA-256, bundle magic, endpoint markers). |
+| **`xaba_explore.py`** | Parse the Xamarin **XABA** assembly-store header/descriptors + manifest to locate assemblies by name. |
+| **`xaba_extract.py`** | Extract + **LZ4-decompress** (pure-Python `XALZ` block decoder) the Generac .NET assemblies from `assemblies.blob` and mine them for endpoints/auth/models. |
+| **`route_config.py`** | Dump the literal REST route templates + base URLs + B2C config from the decompressed assemblies. Produced the [Cloud API doc](../docs/MobileLink-Cloud-API.md). |
 
 ```sh
 python analyze_apk.py "Mobile Link ....apk"
