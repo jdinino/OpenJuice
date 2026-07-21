@@ -31,6 +31,7 @@ restructured.
 | Tenant | `generacconnectivity.onmicrosoft.com` |
 | Policies | `B2C_1A_MobileLink_SignIn`, `…_SignUp`, `…_ChangePassword`, `…_UpdateProfile`, plus an account-**Migration** policy |
 | Scope | `https://generacconnectivity.onmicrosoft.com/cf3e2bfb-2d0c-47dd-8067-bf59a6f88ed7/client` + `openid profile offline_access` |
+| Client ID | likely `072cb28a-e900-4a82-99c3-a39f5ab188b2` (from the app's `msal072cb28a…` redirect scheme; `cf3e2bfb…` is the API/scope app). Confirm from captured MSAL storage. Used for the refresh-token grant. |
 
 **Bootstrap quirk:** the app doesn't hardcode most of this — `ApplicationService.LoadAllFromAzure()` pulls a config object (`BasePaths`, `Scopes`, `ClientId`, `TenantId`, `PolicySignIn/SignUp/UpdateProfile/Migration`, `FeatureFlags`, `RemoteDatabaseTables`) at runtime from:
 

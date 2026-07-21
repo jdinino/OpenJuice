@@ -36,6 +36,10 @@ endpoints across the three Mobile Link generations (native / Xamarin / React Nat
 | **`xaba_explore.py`** | Parse the Xamarin **XABA** assembly-store header/descriptors + manifest to locate assemblies by name. |
 | **`xaba_extract.py`** | Extract + **LZ4-decompress** (pure-Python `XALZ` block decoder) the Generac .NET assemblies from `assemblies.blob` and mine them for endpoints/auth/models. |
 | **`route_config.py`** | Dump the literal REST route templates + base URLs + B2C config from the decompressed assemblies. Produced the [Cloud API doc](../docs/MobileLink-Cloud-API.md). |
+| **`verify_analysis.py`** | Re-test the load-bearing claims against the 3.x APK: Network Security Config cleartext scope, and whether telemetry has any local (vs cloud) source. |
+| **`ble_check.py`** | Inspect the Xamarin BLE service — confirms the local Bluetooth telemetry mode is **portable-generator only**, not the standby WiFi Tether. |
+| **`dotnet_inspect.py`** | Parse the .NET `#Strings` heap for the sent/stored/undo review (request DTOs, PII field inventory, delete/remove ops). |
+| **`ota_hunt.py`** | Search assemblies + bundle for firmware/OTA hosts and update machinery. |
 
 ```sh
 python analyze_apk.py "Mobile Link ....apk"

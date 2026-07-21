@@ -103,6 +103,19 @@ Over a full boot the device made **zero** outbound cloud connections (no DNS, NT
 
 **Conclusion:** with the local surface locked, the beacon is the offline-monitoring ceiling. Deep telemetry (battery, fuel, run-hours, faults) only exists in the cloud channel, which requires registration.
 
+### 4.1 Verified: BLE local mode is portable-only; standby is cloud-only
+
+A skeptical re-pass (2026-07-21) looked specifically for a *missed* local telemetry path. The app **does** contain a Bluetooth telemetry mode — the string *"Mobile Link is connected to {0} and receiving data via Bluetooth"* plus `PortableGenerator_Local_ShowFaults / ShowStatusChanges / ShowCOAlerts / ShowWarnings`. So a genuine local, no-cloud telemetry channel exists — **but it is exclusively for PORTABLE generators** (which carry a BLE comm module and a documented "local mode").
+
+The **standby** path is different: `Is_Connected_To_MLG_Wifi_AP`, `ConnectFromDetails_Tether`, `Mobile_Connect_Tether_FromOfflineDetails` — WiFi-AP + cloud only, with **no `Standby_Local_...` counterpart**. The WGM160P is WiFi-only silicon (no BLE).
+
+| Product | Local telemetry (no cloud)? |
+|---|---|
+| **Portable** generator (BLE comm module) | ✅ yes — phone reads faults/status/CO over Bluetooth |
+| **Standby** generator + WiFi **Tether** (WGM160P) | ❌ none — cloud only |
+
+For a standby unit there is **no local shortcut** (no hidden API, no BLE), so cloud registration is genuinely required for deep telemetry. Reproduce: `tools/verify_analysis.py`, `tools/ble_check.py`.
+
 ---
 
 ## 5. No software reboot
@@ -147,6 +160,21 @@ validate/serialNumber/{serial}  →  enrollment/validate/device  →  enrollment
 ```
 
 Because it's decoupled from WiFi setup, a device already on WiFi (e.g. via §3) can be enrolled without re-touching the provisioning webview that commonly throws the "page not found" error.
+
+### 6.3 Firmware / OTA exposure & mitigation
+
+Connecting to the cloud makes the Tether eligible for a firmware push — the one change `RemoveApparatus` cannot undo. From the app's own firmware machinery:
+
+- The update is **not** a signed-`.bin` download from a fixed URL — there is **no hardcoded firmware/CDN host** in the app. It's a **chunked, resumable, compressed transfer** (`FirmwareUpdateFileControlPayload`; states Pending/NotPending/Rebooting; *"must receive complete stream from beginning"*), app-mediated, and can target the **RCM controller** as well as the WiFi module.
+- So you **can't substitute** it (TLS + signed + proprietary framing) and there's **no single host to block** — but you **can abort** it: interrupting the transfer fails the flash (*"Failing to trigger retry from byte 0"*), leaving current firmware intact.
+
+Mitigations for a headless telemetry poller:
+1. **Poll the API only; don't use the app** — the transfer is app-initiated, so headless polling is unlikely to trigger one.
+2. **Beacon `version` tripwire** — watch the UDP 55555 `version` field; a change = an OTA occurred.
+3. **Router egress kill-switch** — if a large sustained inbound transfer to the device appears, drop its egress to abort per the retry logic above.
+4. **`RemoveApparatus`** to cut the channel entirely.
+
+Net: OTA exposure is real but controllable, and it wouldn't remove the beacon.
 
 ---
 
