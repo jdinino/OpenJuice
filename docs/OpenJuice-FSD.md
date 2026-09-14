@@ -102,7 +102,7 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 | Parameter | Value |
 |---|---|
 | Module | Zentri AMW006-A01.1 |
-| Firmware | WiConnect 2.2.0.12 |
+| Firmware | ZentriOS-WZ 3.6.4.0 (app `EMWERK-JB_1_1-1.4.0.28`) — live unit. A dev board sampled earlier ran WiConnect 2.2.0.12; see [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md). |
 | Interface to MCU | SoftwareSerial on D2(RX)/D4(TX) at 9600 baud |
 | Protocol | ZAP (Zentri Application Protocol) |
 | Status | Left untouched — WiFi module is independent |
@@ -468,9 +468,11 @@ pio run -e juicebox_gen1 -t clean
 
 ### 9.1 Overview
 
-The AMW006 WiFi module is already configured in **stream mode**, which transparently bridges its UART0 to TCP network connections. By adding a SoftwareSerial RAPI channel on D2/D4, any WiFi client can send RAPI commands to the ATmega328P without any changes to the AMW006 firmware.
+> **Revised 2026-09-14 (live-hardware correction).** Earlier drafts assumed the AMW006 already ran in *stream* mode. The live unit is in `bus.mode: command`, and its TCP port 2000 is the **ZentriOS remote-terminal command shell**, not a transparent UART bridge — confirmed by a live `get all` and [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md). The RAPI-stream design below needs the one-time module switch in §9.4 and presupposes OpenJuice/OpenEVSE firmware on the ATmega (which speaks RAPI). For a no-reflash interface the stock module already supports, see §9.10.
 
-**No ZAP protocol is needed.** The original eMotorWerks ZAP protocol was proprietary and cloud-dependent. Instead, we tunnel standard RAPI commands through the AMW006's existing stream mode — the WiFi module acts as a dumb serial-to-WiFi bridge.
+Once the AMW006 is switched to **stream mode** (§9.4), it transparently bridges its UART0 to TCP connections. By adding a SoftwareSerial RAPI channel on D2/D4, any WiFi client can then send RAPI commands to the ATmega328P.
+
+**No ZAP protocol is needed.** The original eMotorWerks ZAP protocol was proprietary and cloud-dependent. Instead, we tunnel standard RAPI commands through the AMW006's stream mode (once enabled per §9.4) — the WiFi module acts as a dumb serial-to-WiFi bridge.
 
 ### 9.2 Architecture
 
@@ -530,9 +532,9 @@ Integration points in `rapi_proc.cpp` — add `g_ESSRP` calls alongside existing
 - `RapiSendBootNotification()` — notify WiFi on boot
 - `RapiSetWifiMode()` — forward WiFi mode changes
 
-### 9.4 AMW006 Configuration (No Changes Needed)
+### 9.4 AMW006 Configuration (One-Time Reconfiguration)
 
-The AMW006 is already configured correctly:
+The stock AMW006 runs in **command** mode (verified live), not stream. The target stream-tunnel config — applied once over the port-2000 command shell (or the `/command/*` HTTP API) with `set …` then `save` — is:
 
 ```
 bus.mode: stream              ← transparent serial↔network bridge
@@ -542,7 +544,7 @@ bus.stream.cmd_seq: $$$       ← escape to command mode (3 sec idle + $$$)
 bus.stream.flush_time: 100    ← 100ms flush interval
 ```
 
-WiFi clients connect via TCP to the AMW006's IP address. Data sent over TCP is forwarded to UART0, which connects to D2/D4 on the ATmega328P.
+WiFi clients then connect via TCP to the AMW006's IP; data sent over TCP is forwarded to UART0 (D2/D4 on the ATmega328P). Switching to stream mode takes over port 2000, so the `$$$` escape is the way back to the command shell — the earlier *No Changes Needed* wording was wrong; this switch is the one change required.
 
 ### 9.5 Build Flags (v0.2)
 
@@ -611,11 +613,11 @@ listen UDP 0.0.0.0:55555
     j = json.loads(payload)
     if "EMWERK-JB" in j["version"]:          # it's a JuiceBox
         host = j["ip"]                        # current IP, even after DHCP churn
-        port = j["remote_terminal_port"]      # 2000 (the stream tunnel, §9.6)
+        port = j["remote_terminal_port"]      # 2000 (command shell stock; stream tunnel after §9.4)
         open TCP host:port  →  speak RAPI
 ```
 
-The beacon's `remote_terminal_port` is exactly the stream-mode port the RAPI tunnel connects to — discovery and transport line up with no extra configuration. This is what retires risk **W3**.
+The beacon's `remote_terminal_port` (2000) is the single TCP port used by both the stock command shell and — after the §9.4 switch — the RAPI stream tunnel, so discovery and transport line up on one port. This retires risk **W3** (the port was unknown); the *mode* still needs the one-time §9.4 change.
 
 #### 9.9.2 Health telemetry from the beacon (no firmware change)
 
@@ -641,6 +643,12 @@ Note the beacon clock free-runs and drifts (~0.7 %), so treat `time` as a livene
 | D4 | The client MAY publish `rssi` and online-state as diagnostic sensors |
 
 **Constraint:** the beacon is a limited broadcast (`255.255.255.255`), so the listener must sit on the **same L2 segment** as the JuiceBox — or capture on the router/AP bridge (see [discovery doc §5](ZentriOS-Gecko-LAN-Discovery.md#5-capturing-the-beacon-router--ap-side)).
+
+---
+
+### 9.10 Alternative: device-hosted web UI (no ATmega reflash)
+
+The stock AMW006 already runs a ZentriOS **HTTP server on port 80 with the `/command/*` REST API enabled** (`http.server.api_enabled: 1`), serving a web app from `webapp/` on the module's flash — all verified live. This makes an **OpenEVSE-style HTML interface possible without flashing the ATmega**: upload a small HTML/JS app into `webapp/`, and have it read module state and the on-flash charge-data files (`ECache*/Events*/ELife*`) through `/command/*`. For live status and control, the proven route is redirecting the JuiceBox's JuiceNet UDP telemetry — the v07 packet format is decoded in [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md) — to a local collector (e.g. [`JuiceRescue/juicepassproxy`](../datasheets/SOURCES.md)), which parses it and replies as the JuiceNet server to set current / start / stop. This path underpins the current "local HTML interface" goal and needs **no firmware changes** — only module config/file writes.
 
 ---
 

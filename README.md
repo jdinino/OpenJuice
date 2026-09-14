@@ -46,8 +46,9 @@ pio run -e juicebox_gen1 -t upload
 ### Related reverse engineering (Zentri / Gecko OS family)
 
 The JuiceBox's AMW006 WiFi module and its ZentriOS/Gecko OS relatives share a
-common LAN discovery protocol and a stream-mode port that OpenJuice v0.2 relies on:
+common LAN discovery beacon and a local TCP service on port 2000 that OpenJuice's local-control path builds on:
 
+- [JuiceBox Gen 1 — Local Protocol & Security Assessment](docs/JuiceBox-Gen1-Pentest-RE.md) — full RE of the live unit: the ZentriOS command surface (ports 80/2000, the working `/command/*` HTTP API), the decoded **JuiceNet UDP telemetry protocol** (state, voltage, max current, lifetime/session energy), the Enel X / Voltie cloud backends, and the module's on-board web server — the basis for a local HTML interface and control.
 - [ZentriOS/Gecko OS LAN Discovery Beacon & Local Protocols](docs/ZentriOS-Gecko-LAN-Discovery.md) — the UDP 55555 JSON beacon (auto-discovers the JuiceBox IP for v0.2), port 2000, and how to capture it. Verified on live JuiceBox + Generac hardware.
 - [Generac Mobile Link Tether — RE Notes](docs/Generac-MobileLink-Tether-RE.md) — a sister cloud-tethered device on the same OS family (Gecko OS / WGM160P): provisioning protocol, locked-down local surface, and cloud API. A cautionary counterpoint to the recoverable JuiceBox.
 - [Mobile Link App Lineage & Legacy V1 Provisioning](docs/MobileLink-App-Lineage.md) — three app generations (Xamarin → Xamarin → React Native) reverse-engineered to recover the legacy **GainSpan V1** provisioning API for older controllers, mapped against the modern V2 Gecko OS flow.

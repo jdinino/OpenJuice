@@ -24,3 +24,13 @@ desktop.ini
 *.pem
 *.key
 credentials*
+
+# Local reference binaries (third-party APKs kept for analysis; not committed -- see docs/SOURCES.md)
+/apks/
+
+# Python artifacts (tools/)
+__pycache__/
+*.pyc
+
+# Local research artifacts (device backups, pcaps, raw pentest report with secrets) -- kept local, not committed
+/research/
