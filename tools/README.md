@@ -37,6 +37,26 @@ Run it on a host on the **same subnet** as the device; allow inbound UDP 55555 i
 the host firewall if no beacon appears (the tool prints the exact `netsh` rule).
 Unlike the pcap tools above, this needs no capture — it listens on the LAN directly.
 
+### ATmega firmware analysis
+
+| Script | What it does |
+|---|---|
+| **`avr_pinmap.py`** | Recovers **hints** about ATmega328P pin usage from a firmware image (Intel HEX or raw), with no AVR toolchain installed. Scans for `SBI`/`CBI`/`SBIC`/`SBIS`, which encode the I/O register and bit number directly in the opcode, plus `STS` writes to Timer1/ADC/interrupt registers. Intended for the PCB 8.14+ flash dump, whose pin map is documented nowhere (FSD risk **R8**). |
+
+```sh
+python avr_pinmap.py stock_flash.hex --min-hits 2
+python avr_pinmap.py dump.bin --raw
+```
+
+⚠️ **Calibrated and found insufficient on its own — read the header before trusting output.**
+Run against `firmware_8.9.hex` (whose source *is* published) it recovered the Timer1/pilot pins and
+the peripheral configuration, but **not** the relay, GFI sense, GFI test or latch reset — those go
+through Arduino's `digitalWrite()` with a variable pin number, which compiles to indirect register
+access and is invisible to this scan. It also reported `SBI EIMSK` for all eight bits when the chip
+only *has* two, proving a linear scan cannot separate code from flash data tables. The tool now
+flags that pattern itself. Treat output as corroboration for a hypothesis you already hold; establish
+safety-critical pins electrically, or with a real disassembler that follows control flow.
+
 ### APK / firmware analysis (stdlib zip parsing — used to build the [App Lineage](../docs/MobileLink-App-Lineage.md) doc)
 
 These take an APK path as `argv[1]`. They detect the app framework and mine

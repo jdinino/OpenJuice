@@ -132,6 +132,14 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 > **Verify D3/D5/D7/D9/D12 electrically before flashing** — a wrong relay or GFI pin on a 40 A
 > mains circuit is the failure mode that actually matters.
 >
+> Recovering the map from the stock firmware image was evaluated as a shortcut and is **not
+> sufficient on its own**. `tools/avr_pinmap.py`, calibrated against the published `firmware_8.9.hex`,
+> recovered the Timer1/pilot pins and the peripheral configuration but missed the relay, GFI sense,
+> GFI test and latch reset — the stock firmware reaches those through Arduino's `digitalWrite()`
+> with a variable pin number, which compiles to indirect register access. A linear opcode scan also
+> cannot separate code from flash data tables. Use it to corroborate, not to decide; the electrical
+> check above remains the primary method.
+>
 > ⚠️ **ISP hazard.** Three of these lines carry stock functions that fight the programmer: **D11**
 > is driven by the RF remote receiver's output (an external push-pull driver on MOSI is the classic
 > cause of ISP sync failure), **D12** drives a **GFCI-tripping relay**, and **D13** drives a 6 W
