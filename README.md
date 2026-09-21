@@ -10,14 +10,14 @@ OpenJuice ports [OpenEVSE](https://github.com/OpenEVSE/open_evse) firmware to ru
 - Provides local RAPI serial control (current, voltage, state, GFI)
 - SAE J1772 compliant pilot signal and state machine
 - GFI protection with self-test and D-latch support
-- Leaves the WiFi module (AMW006) untouched
+- Leaves the WiFi module (AMW106) untouched
 
 ## Hardware
 
 | Component | Details |
 |---|---|
 | MCU | ATmega328P @ 16MHz, 5V |
-| WiFi | Zentri AMW006 (unchanged) |
+| WiFi | Zentri AMW106 (unchanged) — earlier revisions said AMW006; see [FSD §2.3](docs/OpenJuice-FSD.md) |
 | Programming | USBasp ISP via MOSI/MISO/SCK/RESET |
 | Serial | RAPI on D0/D1 @ 115200 baud |
 
@@ -45,7 +45,7 @@ pio run -e juicebox_gen1 -t upload
 
 ### Related reverse engineering (Zentri / Gecko OS family)
 
-The JuiceBox's AMW006 WiFi module and its ZentriOS/Gecko OS relatives share a
+The JuiceBox's AMW106 WiFi module and its ZentriOS/Gecko OS relatives share a
 common LAN discovery beacon and a local TCP service on port 2000 that OpenJuice's local-control path builds on:
 
 - [JuiceBox Gen 1 — Local Protocol & Security Assessment](docs/JuiceBox-Gen1-Pentest-RE.md) — full RE of the live unit: the ZentriOS command surface (ports 80/2000, the working `/command/*` HTTP API), the decoded **JuiceNet UDP telemetry protocol** (state, voltage, max current, lifetime/session energy), the Enel X / Voltie cloud backends, and the module's on-board web server — the basis for a local HTML interface and control.

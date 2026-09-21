@@ -8,7 +8,7 @@
 
 ## 1. Why this is in the OpenJuice repo
 
-This is a **sister case** to the JuiceBox: another cloud-tethered consumer device built on the **same OS family** (Gecko OS is the successor to the ZentriOS/WiConnect stack the JuiceBox's AMW006 runs). Same discovery beacon ([ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md)), same port-2000 concept, same "the hardware is fine, the cloud is the leash" problem OpenJuice exists to solve.
+This is a **sister case** to the JuiceBox: another cloud-tethered consumer device built on the **same OS family** (Gecko OS is the successor to the ZentriOS/WiConnect stack the JuiceBox's AMW106 runs). Same discovery beacon ([ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md)), same port-2000 concept, same "the hardware is fine, the cloud is the leash" problem OpenJuice exists to solve.
 
 The contrast is instructive:
 
@@ -191,7 +191,7 @@ The Android APK (`Mobile Link for Generators 3.16.0`) is a React Native app comp
 
 | | JuiceBox Gen 1 | Generac Mobile Link Tether |
 |---|---|---|
-| Module | Zentri AMW006 | Silicon Labs WGM160P |
+| Module | Zentri AMW106 | Silicon Labs WGM160P |
 | OS | ZentriOS-WZ 3.6.4.0 | Gecko OS STANDARD 4.2.3 |
 | Discovery beacon (UDP 55555) | ✅ yes | ✅ yes |
 | Port 2000 | ✅ **open** (stream→UART) | 🔒 closed |

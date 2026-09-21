@@ -32,7 +32,7 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 
 | In Scope | Out of Scope |
 |---|---|
-| ATmega328P firmware replacement | WiFi module (AMW006) firmware changes |
+| ATmega328P firmware replacement | WiFi module (AMW106) firmware changes |
 | Pin remapping (firmware only) | Hardware board modifications |
 | GFI detection + D-latch reset | Cloud connectivity / MQTT / WiFi portal |
 | J1772 pilot signal on D9 (OC1A) | LCD/button menu system |
@@ -74,7 +74,7 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
                     │   GFI Latch Reset ──────── D7 (active LOW)  │
                     │                                             │
                     │   ┌──────────┐    SoftSerial     ┌────────┐ │
-                    │   │ATmega328P│◄── D2/D4 9600 ───►│ AMW006 │ │
+                    │   │ATmega328P│◄── D2/D4 9600 ───►│ AMW106 │ │
                     │   │ 16MHz 5V │    (ZAP protocol)  │ WiFi   │ │
                     │   │          │                    │ Module  │ │
                     │   │  D0/D1 ──┼── RAPI 115200 ──► │(unused) │ │
@@ -95,23 +95,48 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 | EEPROM | 1 KB |
 | Operating Voltage | 5V |
 | Package | TQFP-32 (on JuiceBox board) |
-| Bootloader | Optiboot (likely) — eMotorWerks used FTDI serial for firmware updates |
+| Bootloader | **ATmegaBOOT_168, 2 KB, 57600 baud** — *not* Optiboot. eMotorWerks' documented board target is "Arduino Pro or Pro Mini 5V, 16 MHz w/ ATmega328", which maps to `ATmegaBOOT_168_atmega328.hex` with `upload.speed=57600` and `maximum_size=30720` (= 32768 − 2048, confirming a 2 KB boot section). **Connecting at 115200 fails with `stk500_getsync()` and falsely suggests no bootloader exists.** Inferred from the documented update path; unconfirmed on PCB 8.14+. |
 
 ### 2.3 WiFi Module (Not Modified)
 
 | Parameter | Value |
 |---|---|
-| Module | Zentri AMW006-A01.1 |
+| Module | **Zentri AMW106** (inferred — see provenance note below; previously recorded as AMW006-A01.1) |
 | Firmware | ZentriOS-WZ 3.6.4.0 (app `EMWERK-JB_1_1-1.4.0.28`) — live unit. A dev board sampled earlier ran WiConnect 2.2.0.12; see [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md). |
 | Interface to MCU | SoftwareSerial on D2(RX)/D4(TX) at 9600 baud |
 | Protocol | ZAP (Zentri Application Protocol) |
 | Status | Left untouched — WiFi module is independent |
+
+> **Part-number provenance (corrected 2026-09-21).** Earlier revisions of this document said
+> **AMW006**. The evidence favours **AMW106**: the ZentriOS-WZ 3.6 command reference that this unit
+> actually runs lists its supported platforms as AMW004 / AMW106 / AMW136 — 242 occurrences of
+> AMW106 across the archived docs versus 5 of AMW006, and those 5 are incidental TX-power asides
+> rather than platform-support declarations. Computest Sector 7's teardown likewise attributes
+> **AMW106** to ZentriOS-era JuiceBoxes, and AMW006 is the *WiConnect*-era part — which is exactly
+> what the dev board in `research/amw006-firmware-backup/` ran. The live unit reports no part number
+> of its own, so this remains inference; confirm visually when the case is opened. Directory names
+> under `research/` still carry the old spelling.
 
 ---
 
 ## 3. Pin Mapping
 
 ### 3.1 Complete Pin Assignment Table
+
+> ⚠️ **This table encodes the PCB V8.9 pin map and is UNVERIFIED for this unit (PCB 8.14+).**
+> The stock V8.9 source states in its own header that it matches "V8.9 boards ONLY", and warns that
+> pinouts "changed significantly between 8.7 and 8.9" and "will also change between 8.9 and 8.10
+> versions". **No public source exists for 8.10 or later** — the archived `JuiceBox_Public/` index
+> contains folders only up to 8.10, and eMotorWerks never published a schematic for any revision
+> (the archived `Schematics/` directory holds a single 0-byte file named "COMING SOON").
+> **Verify D3/D5/D7/D9/D12 electrically before flashing** — a wrong relay or GFI pin on a 40 A
+> mains circuit is the failure mode that actually matters.
+>
+> ⚠️ **ISP hazard.** Three of these lines carry stock functions that fight the programmer: **D11**
+> is driven by the RF remote receiver's output (an external push-pull driver on MOSI is the classic
+> cause of ISP sync failure), **D12** drives a **GFCI-tripping relay**, and **D13** drives a 6 W
+> heater pad and buzzer. Ordinary SPI traffic toggles all three as a side effect.
+> **Only ever run ISP with the unit unplugged from mains.**
 
 | ATmega328P Pin | Arduino Pin | JuiceBox Function | OpenEVSE Default | Remap Required |
 |---|---|---|---|---|
@@ -126,9 +151,9 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 | PB0 | D8 | (available) | Relay control | **Yes — freed** |
 | PB1 | D9 | **Pilot PWM (OC1A)** | N/A | **Yes — new** |
 | PB2 | D10 | (available) | Pilot PWM (OC1B) | **Yes — freed** |
-| PB3 | D11 | ISP MOSI | ISP MOSI | No |
-| PB4 | D12 | **GFI test output** | ISP MISO | **Yes — new** |
-| PB5 | D13 | ISP SCK / Status LED | ISP SCK | No |
+| PB3 | D11 | **`pin_ctrlBtn_A` — RF remote receiver output** (shared with ISP MOSI) | ISP MOSI | No |
+| PB4 | D12 | **`pin_GFItest` — drives a GFCI-tripping relay** (shared with ISP MISO) | ISP MISO | **Yes — new** |
+| PB5 | D13 | **`pin_PCBHeater` — 6 W heating pad / buzzer** (shared with ISP SCK) | ISP SCK | No |
 | PC0 | A0 | **Pilot voltage sense** | Current sense | **Yes — swapped** |
 | PC1 | A1 | **Voltage sense** | Pilot voltage sense | **Yes — swapped** |
 | PC2 | A2 | **Current sense** | Voltage sense | **Yes — swapped** |
@@ -337,26 +362,53 @@ New environment in `platformio.ini`:
 platform = atmelavr
 board = pro16MHzatmega328
 framework = arduino
-upload_protocol = usbasp
-upload_flags = -e          ; erase chip (clear old EEPROM)
-build_flags =
+upload_protocol = arduino  ; serial bootloader — preserves it (see §7.2)
+upload_speed = 57600       ; ATmegaBOOT_168, NOT 115200 (see §2.2)
+; upload_protocol = usbasp ; ISP fallback only if no bootloader responds; read §3.1 hazards first
+;
+; DO NOT add `-e`. Chip erase destroys the bootloader AND the stock EEPROM (R4, R9).
+; Drift note: firmware/openevse-juicebox-gen1.patch specifies `upload_flags = "-e -B0.5"`.
+; `-B0.5` is avrdude's BITCLOCK, not a fuse. The patch is authoritative for flag *names*;
+; both erase settings are superseded by §7.2.
+build_src_flags =          ; the patch uses build_src_flags, not build_flags
     -D JUICEBOX_GEN1
     -D AMMETER
     -D VOLTMETER
     -D RAPI
     -D RAPI_SERIAL
-    -D GFI
-    -D GFI_SELFTEST
     -D GFI_LATCH_RESET
-    -D PAFC_PWM
     -D NO_AUTOSVCLEVEL
     -D DEFAULT_SERVICE_LEVEL=2
     -D DEFAULT_CURRENT_CAPACITY_L2=30
+    -D MAX_CURRENT_CAPACITY_L2=40
     -D DEFAULT_CURRENT_SCALE_FACTOR=90
+    -D SERIAL_BAUD=115200
+    -D 'VERSION="${common.version}.OJ"'
     -D SERIAL_BAUD=115200
 ```
 
 ### 5.2 Excluded Features
+
+> ⚠️ **`GFI_SELFTEST` is OFF in this build, and that appears unintended.**
+> The patch wraps `#define UL_COMPLIANT` in `#ifndef JUICEBOX_GEN1`, and `GFI_SELFTEST` is defined
+> *inside* the `#ifdef UL_COMPLIANT` block in `open_evse.h`. Disabling UL_COMPLIANT therefore also
+> disables the GFI power-on self-test, as a side effect of excluding `ADVPWR` (which *is*
+> intended — §5.2). The patch does not pass `-D GFI_SELFTEST` to compensate.
+>
+> **Ground-fault *detection* is unaffected and remains ON.** `GFI` is default-defined in
+> `open_evse.h` outside the UL_COMPLIANT block and the patch never disables it — which is why the
+> `-D GFI` previously listed here was redundant rather than load-bearing. This is a missing
+> self-test, not a missing protection.
+>
+> The patch already carries JuiceBox pin mappings for the self-test (`GFITEST_REG &PINB`,
+> `GFITEST_IDX 4` → PB4/D12) guarded by `#ifdef GFI_SELFTEST`, so the capability is wired up and one
+> flag away. **Decide deliberately:** add `-D GFI_SELFTEST` to restore the boot POST, or accept its
+> absence — but §7.3 currently asserts a POST that does not run, so one of the two must change.
+>
+> Two further drifts corrected above: the patch does not pass `-D PAFC_PWM` either, though §4.1 and
+> the "Files Confirmed Compatible" table both assume PAFC_PWM mode — verify before relying on it.
+> And the patch still specifies `upload_flags = "-e -B0.5"`, i.e. **it still chip-erases**; §7.2 now
+> forbids that, so `firmware/openevse-juicebox-gen1.patch` needs the same fix.
 
 These OpenEVSE features are explicitly NOT enabled (no hardware support on JuiceBox Gen 1):
 
@@ -411,18 +463,65 @@ pio run -e juicebox_gen1 -t clean
 
 ### 7.1 Pre-Flash Checklist
 
-- [ ] AMW006 WiFi module firmware backed up (see `C:\AI\amw006_firmware_backup\`)
-- [ ] AMW006 configuration backed up (see `C:\AI\amw006_config_backup.txt`)
-- [ ] USBasp ISP programmer connected (MOSI→D11, MISO→D12, SCK→D13, RESET→RESET)
-- [ ] USB-serial adapter connected to D0/D1 at 115200 baud for RAPI
-- [ ] JuiceBox unplugged from mains AC
+> 🛑 **STOP — reversibility gate.** No dump of this unit's stock ATmega firmware exists, and
+> eMotorWerks/Enel X never published one. **Flashing without first reading the chip out is a
+> one-way door.** The EEPROM is the irreplaceable part: on JB1.x it holds the unit's identity
+> (`IDstamp`), the meter calibration, and a checksum of the flash. Nobody has ever published a
+> JuiceBox flash, fuse or lock-bit readout — completing this step would be the first.
+
+**Backup — before anything else:**
+
+> ⚠️ **Read this before issuing the first command.** Fuses and lock bits are **ISP-only** — serial
+> bootloaders can read flash and EEPROM but *cannot* read fuses. And **the ISP header location on
+> PCB 8.14+ is unresolved**: the archived V8.9 layout shows no ISP silkscreen at all, while a
+> secondhand account describes a 9-pin SPI header beside a 12-pin on some revision. **Read §3.1's
+> ISP hazard warning first** — D11, D12 and D13 all carry live stock functions.
+>
+> What *is* known, from the archived V8.9 board file
+> (`research/emotorwerks-archive-8.9/JB-V8.9-board.txt`): the MCU is an **Arduino Pro Mini
+> daughterboard, part designator `A1`**, and its 6-pin serial header is silkscreened
+> `BLK · GND · VCC · RXI · TXO · GRN` with **`BLK` at the GND end** (the vendor's assembly manual
+> says to align the FTDI's GND to the `BLK` position). On V8.9 it sits at roughly
+> **x 0.63–1.32 in, y ≈ 6.1 in** on a 2.40 × 8.8 in board. **V8.9 only — unverified on 8.14+.**
+
+- [ ] **Read lock bits and fuses**, recorded verbatim:
+      `avrdude -c usbasp -p m328p -U lock:r:-:h -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h`
+- [ ] **Dump flash.** Prefer serial (`-c arduino -b 57600`) — serial bootloaders *can* read back
+      (`ATmegaBOOT_168.c:703`, `optiboot.c:1150`), and bootloader readback uses internal LPM so it
+      is **not gated by lock bits**. Fall back to `-c usbasp` only if no bootloader responds.
+- [ ] **Dump EEPROM** — `-U eeprom:r:stock_eeprom.hex:i`
+- [ ] **Verify the dump is genuine:** two consecutive reads must hash identically, and the image
+      must not be blank `0xFF`. A dump failing either test is not a backup.
+- [ ] Module filesystem backed up — 97 files, `research/juicebox-module-backup-<date>/`.
+      Note `JB1_0.zap`, `sys/kernel.bin` and `sys/services.bin` **cannot** be extracted (`file_open`
+      and `file_stat` both refuse), so the module application is *not* recoverable.
+- [ ] Module configuration backed up — `research/amw006-live-config-*.txt` (`get all`)
+
+**Hardware:**
+
+- [ ] JuiceBox **unplugged from mains**. This is a plug-in NEMA 14-50 unit, so unplugging is
+      sufficient and is the correct procedure — do not rely on the breaker alone.
+- [ ] Exactly **one** 5 V source present. The vendor's own FTDI adapter carried a VCC jumper for
+      precisely this reason; mains-off with USB supplying 5 V was the documented default.
+- [ ] Programmer connected — **read the ISP hazard warning in §3.1 before attaching anything**
+- [ ] USB-serial adapter for RAPI on D0/D1 at 115200 — **but confirm first** that D0/D1 is not the
+      inter-processor bus on this PCB revision (see R10)
 
 ### 7.2 Flash Procedure
 
-1. Connect USBasp to ISP header
-2. `pio run -e juicebox_gen1 -t upload` (includes `-e` chip erase)
-3. Verify via RAPI: `$GV` should return OpenEVSE version string
-4. `$GS` should return state 1 (State A — no vehicle connected)
+> ⚠️ **Do not chip-erase.** Earlier revisions of this document specified `upload_flags = -e`.
+> A chip erase **destroys the bootloader**, permanently removing the serial programming route
+> unless it is re-burned with an ISP programmer — and it wipes the EEPROM identity and calibration.
+> OpenEVSE v0.1 measures **12,450 bytes**, comfortably inside the bootloader's 30,720-byte limit,
+> so **the bootloader can be kept and OpenEVSE still runs.**
+
+1. Complete §7.1 in full. Do not proceed on a dump that failed verification.
+2. **Preferred — serial, preserving the bootloader:**
+   `avrdude -c arduino -p m328p -P COM<n> -b 57600 -U flash:w:juicebox_gen1.hex:i`
+   (PlatformIO: `upload_protocol = arduino`, `upload_speed = 57600`, **no** `-e`)
+3. **Fallback — ISP**, only if no bootloader responds. Re-read the §3.1 ISP hazard first.
+4. Verify via RAPI: `$GV` returns the OpenEVSE version string
+5. `$GS` returns state 1 (State A — no vehicle connected)
 
 ### 7.3 Functional Tests
 
@@ -430,7 +529,7 @@ pio run -e juicebox_gen1 -t clean
 |---|---|---|
 | Version check | `$GV` | Version string returned |
 | State A (idle) | `$GS` | State 1 |
-| GFI self-test | `$GF` | No fault counts; POST passes at boot |
+| GFI self-test | `$GF` | ⚠️ **No boot POST runs** — `GFI_SELFTEST` is disabled in the shipped build (§5.1). `$GF` returns fault counts only. Add `-D GFI_SELFTEST` if you want the power-on self-test; the pin mappings already exist |
 | Current reading | `$GG` | ~0A, ~240V (or 0V if unpowered) |
 | Capacity setting | `$SC 24` | OK; `$GC` returns 24 |
 | Enable/disable | `$FE` / `$FD` | State changes; relay clicks |
@@ -457,22 +556,25 @@ pio run -e juicebox_gen1 -t clean
 | R1 | Pilot thresholds incorrect — EV not detected | High | Medium | Verify with scope/simulator; adjustable via RAPI |
 | R2 | Current scale factor wrong — overcurrent | **Critical** | Medium | Calibrate with clamp meter before live use; hardware CT limits max anyway |
 | R3 | GFI latch timing too short — self-test fails | Medium | Low | Start at 100ms; increase if needed; adjustable in code |
-| R4 | EEPROM contains old JuiceBox data — erratic behavior | Medium | High | Chip erase (`-e`) during flash clears EEPROM |
-| R5 | ISP conflicts with GFI test pin (D12/MISO) | Low | Medium | GFI test only active during self-test; ISP only during programming |
+| R4 | **Chip erase destroys the stock EEPROM** — identity (`IDstamp`), meter calibration and the flash checksum live there, and no copy exists | **Critical** | High | **Dump EEPROM first (§7.1); do not pass `-e`.** Erasing is not a mitigation, it *is* the damage |
+| R5 | **ISP lines carry live stock functions** — D12 drives a GFCI-tripping relay, D11 is driven by the RF remote receiver, D13 drives a 6 W heater pad | **High** | High | Run ISP only with mains unplugged. If sync fails, suspect D11 driver contention first; lift the receiver output or the Pro Mini's D11 pin |
 | R6 | Relay pin D5 conflicts with Timer0 OC0B | Low | Low | OpenEVSE doesn't use Timer0 OC0B for relay — uses direct GPIO |
 | R7 | WiFi module SoftSerial interrupts interfere | Low | Low | WiFi module is independent; D2/D4 not used in v0.1 (used in v0.2) |
+| R8 | **Pin map is V8.9; this unit is PCB 8.14+** — no public source exists for 8.10 or later, and no schematic was ever published for any revision | **Critical** | High | Verify D3/D5/D7/D9/D12 electrically before flashing (§3.1) |
+| R9 | **No stock firmware dump exists** — flashing without one is irreversible, and the vendor's own advice was to preserve *source*, not a binary | **Critical** | High | §7.1 backup gate. Alternatively flash a spare Arduino Pro Mini 5V module (~$3–8) and shelf the original — reversible regardless of lock bits, **but only if the original is removable.** V8.9 solders the Pro Mini by its header pins; socket-vs-solder on 8.14+ is NOT FOUND and must be established by opening the unit |
+| R10 | **D0/D1 may be the inter-processor bus on 8.14+.** On Gen 2 the ATmega UART *is* the WiFi-module link; an FTDI adapter would contend with it | High | Unknown | Trace where the WiFi module's UART meets the ATmega before connecting. V8.9 used SoftSerial D2/D4, leaving D0/D1 free — unverified for 8.14+ |
 
 ---
 
-## 9. v0.2 — WiFi RAPI Tunneling via AMW006
+## 9. v0.2 — WiFi RAPI Tunneling via AMW106
 
 ### 9.1 Overview
 
-> **Revised 2026-09-14 (live-hardware correction).** Earlier drafts assumed the AMW006 already ran in *stream* mode. The live unit is in `bus.mode: command`, and its TCP port 2000 is the **ZentriOS remote-terminal command shell**, not a transparent UART bridge — confirmed by a live `get all` and [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md). The RAPI-stream design below needs the one-time module switch in §9.4 and presupposes OpenJuice/OpenEVSE firmware on the ATmega (which speaks RAPI). For a no-reflash interface the stock module already supports, see §9.10.
+> **Revised 2026-09-14 (live-hardware correction).** Earlier drafts assumed the AMW106 already ran in *stream* mode. The live unit is in `bus.mode: command`, and its TCP port 2000 is the **ZentriOS remote-terminal command shell**, not a transparent UART bridge — confirmed by a live `get all` and [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md). The RAPI-stream design below needs the one-time module switch in §9.4 and presupposes OpenJuice/OpenEVSE firmware on the ATmega (which speaks RAPI). For a no-reflash interface the stock module already supports, see §9.10.
 
-Once the AMW006 is switched to **stream mode** (§9.4), it transparently bridges its UART0 to TCP connections. By adding a SoftwareSerial RAPI channel on D2/D4, any WiFi client can then send RAPI commands to the ATmega328P.
+Once the AMW106 is switched to **stream mode** (§9.4), it transparently bridges its UART0 to TCP connections. By adding a SoftwareSerial RAPI channel on D2/D4, any WiFi client can then send RAPI commands to the ATmega328P.
 
-**No ZAP protocol is needed.** The original eMotorWerks ZAP protocol was proprietary and cloud-dependent. Instead, we tunnel standard RAPI commands through the AMW006's stream mode (once enabled per §9.4) — the WiFi module acts as a dumb serial-to-WiFi bridge.
+**No ZAP protocol is needed.** The original eMotorWerks ZAP protocol was proprietary and cloud-dependent. Instead, we tunnel standard RAPI commands through the AMW106's stream mode (once enabled per §9.4) — the WiFi module acts as a dumb serial-to-WiFi bridge.
 
 ### 9.2 Architecture
 
@@ -481,7 +583,7 @@ WiFi Client (phone/laptop/HA)
         │
         ▼ TCP connection
 ┌──────────────┐
-│   AMW006     │  stream mode: TCP ↔ UART0 transparent bridge
+│   AMW106     │  stream mode: TCP ↔ UART0 transparent bridge
 │   WiFi       │  IP: 192.168.x.x, port 2000 (default)
 │   Module     │
 └──────┬───────┘
@@ -532,9 +634,9 @@ Integration points in `rapi_proc.cpp` — add `g_ESSRP` calls alongside existing
 - `RapiSendBootNotification()` — notify WiFi on boot
 - `RapiSetWifiMode()` — forward WiFi mode changes
 
-### 9.4 AMW006 Configuration (One-Time Reconfiguration)
+### 9.4 AMW106 Configuration (One-Time Reconfiguration)
 
-The stock AMW006 runs in **command** mode (verified live), not stream. The target stream-tunnel config — applied once over the port-2000 command shell (or the `/command/*` HTTP API) with `set …` then `save` — is:
+The stock AMW106 runs in **command** mode (verified live), not stream. The target stream-tunnel config — applied once over the port-2000 command shell (or the `/command/*` HTTP API) with `set …` then `save` — is:
 
 ```
 bus.mode: stream              ← transparent serial↔network bridge
@@ -544,7 +646,7 @@ bus.stream.cmd_seq: $$$       ← escape to command mode (3 sec idle + $$$)
 bus.stream.flush_time: 100    ← 100ms flush interval
 ```
 
-WiFi clients then connect via TCP to the AMW006's IP; data sent over TCP is forwarded to UART0 (D2/D4 on the ATmega328P). Switching to stream mode takes over port 2000, so the `$$$` escape is the way back to the command shell — the earlier *No Changes Needed* wording was wrong; this switch is the one change required.
+WiFi clients then connect via TCP to the AMW106's IP; data sent over TCP is forwarded to UART0 (D2/D4 on the ATmega328P). Switching to stream mode takes over port 2000, so the `$$$` escape is the way back to the command shell — the earlier *No Changes Needed* wording was wrong; this switch is the one change required.
 
 ### 9.5 Build Flags (v0.2)
 
@@ -580,18 +682,22 @@ $FD          # disable charging
 |---|---|---|---|
 | W1 | SoftwareSerial interrupts interfere with pilot PWM timing | Medium | Test with scope; SoftwareSerial at 9600 has short ISRs |
 | W2 | Flash/RAM overhead of SoftwareSerial library | Low | SoftwareSerial adds ~1.5KB flash, ~70 bytes RAM; v0.1 uses 40.5% flash |
-| W3 | ~~AMW006 stream mode TCP port unknown~~ **Resolved** | Low | **Confirmed port 2000** — the live JuiceBox's UDP 55555 beacon advertises `remote_terminal_port: 2000` (§9.9; [discovery doc](ZentriOS-Gecko-LAN-Discovery.md)) |
-| W4 | No authentication on TCP connection | Medium | AMW006 is on local WiFi only; add `http.server.password` if needed |
+| W3 | ~~AMW106 stream mode TCP port unknown~~ **Resolved** | Low | **Confirmed port 2000** — the live JuiceBox's UDP 55555 beacon advertises `remote_terminal_port: 2000` (§9.9; [discovery doc](ZentriOS-Gecko-LAN-Discovery.md)) |
+| W4 | No authentication on TCP connection | Medium | AMW106 is on local WiFi only; add `http.server.password` if needed |
 
 ### 9.8 Prerequisites
 
 - v0.1 firmware flashed and verified (RAPI working on D0/D1)
-- AMW006 connected to local WiFi (already configured: SSID "Ellen")
-- AMW006 stream mode active (already configured)
+- WiFi module connected to the local WLAN — **verify; do not assume** (an earlier revision of this
+  document named a stale SSID)
+- Stream mode — ⚠️ **NOT already configured.** The live unit reports `bus.mode: command`, confirmed
+  by `get all` and by §9.4. Switching to stream is a one-time reconfiguration you must perform, and
+  `$$$` is the documented way back out. Earlier revisions asserted this precondition was already
+  met; it is not.
 
 ### 9.9 Local Discovery & Health Monitoring (UDP 55555 Beacon)
 
-The AMW006 — like all ZentriOS/Gecko OS modules — broadcasts a JSON **discovery beacon on UDP 55555** every ~10 seconds. This removes the need to hardcode the JuiceBox IP (§9.6) and provides a passive health feed **with zero changes to the AMW006 or the ATmega firmware**. Full protocol spec and live captures: [ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md).
+The AMW106 — like all ZentriOS/Gecko OS modules — broadcasts a JSON **discovery beacon on UDP 55555** every ~10 seconds. This removes the need to hardcode the JuiceBox IP (§9.6) and provides a passive health feed **with zero changes to the AMW106 or the ATmega firmware**. Full protocol spec and live captures: [ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md).
 
 Verified beacon from a live JuiceBox Gen 1:
 
@@ -648,18 +754,28 @@ Note the beacon clock free-runs and drifts (~0.7 %), so treat `time` as a livene
 
 ### 9.10 Alternative: device-hosted web UI (no ATmega reflash)
 
-The stock AMW006 already runs a ZentriOS **HTTP server on port 80 with the `/command/*` REST API enabled** (`http.server.api_enabled: 1`), serving a web app from `webapp/` on the module's flash — all verified live. This makes an **OpenEVSE-style HTML interface possible without flashing the ATmega**: upload a small HTML/JS app into `webapp/`, and have it read module state and the on-flash charge-data files (`ECache*/Events*/ELife*`) through `/command/*`. For live status and control, the proven route is redirecting the JuiceBox's JuiceNet UDP telemetry — the v07 packet format is decoded in [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md) — to a local collector (e.g. [`JuiceRescue/juicepassproxy`](../datasheets/SOURCES.md)), which parses it and replies as the JuiceNet server to set current / start / stop. This path underpins the current "local HTML interface" goal and needs **no firmware changes** — only module config/file writes.
+The stock WiFi module runs a ZentriOS **HTTP server on port 80 with the `/command/*` REST API enabled** (`http.server.api_enabled: 1`) — verified live, and it is how this project reads and reconfigures the module.
+
+⚠️ **Correction (2026-09-21):** an earlier revision claimed the module "serves a web app from `webapp/` … all verified live". **It does not.** A live `ls` shows **no `webapp/` directory exists**, and `GET /` returns **404** even though `http.server.root_filename` is set to `webapp/index.html`. That claim came from a dev board, not this unit. The practical consequence is favourable — **the `webapp/` namespace is empty and free to claim**, and `root_filename` already points at it — but it must be created, not assumed.
+
+An OpenEVSE-style HTML interface is therefore possible **without flashing the ATmega**: upload an HTML/JS app into `webapp/` via `file_create`, and have it read module state through `/command/*` plus the on-flash charge-data files (`ECache*`/`Events*`/`ELife_1`), which download over plain HTTP.
+
+**What this path cannot do on its own.** Live status (voltage, current, power, charging state) and current control exist **only** in the JuiceNet UDP stream the ATmega generates; the module is a pipe for that stream and exposes none of it — `help commands` returns pure stock ZentriOS with nothing charger-related. Both therefore require something acting as the JuiceNet server: this PC, a Pi, or (post-port) the module itself in stream mode. Note also there is **no start/stop opcode** — the `C` field is not an opcode table, and pausing is done by sending online current `A=0` (which resets session energy and cycles the contactor).
+
+The proven route for live status and control is redirecting the JuiceNet UDP telemetry — v07 packet format decoded in [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md) — to a local collector (`tools/juicebox_rawcap.py`, or [`JuiceRescue/juicepassproxy`](../datasheets/SOURCES.md)), which replies as the JuiceNet server. **The reply must be sourced from the exact IP:port the device addresses** — verified on this unit, where spoofing that source produced five confirmed current changes.
+
+*Why* that is required is inferred rather than established here: juicepassproxy issue #149 reports that the firmware honours commands only after completing its `directory-api.emotorwerks.com` handshake **and** only from the endpoint that handshake named. **That finding is from an EO Mini Pro rebadge (`EMWERK-JEO2`), not from `EMWERK-JB_1_1`, and is unconfirmed on this hardware.** It is consistent with our observations but has not been isolated. One practical consequence if it holds: blocking the directory server — sometimes recommended to prevent the encryption switch — could stop the device accepting *any* commands after its next reboot.
 
 ---
 
 ## 10. Future Enhancements (Out of Scope for v0.1 and v0.2)
 
 - **MQTT support:** Expose RAPI data via MQTT through the WiFi module
-- **Web UI:** Serve a local configuration page from the AMW006's HTTP server
+- **Web UI:** Serve a local configuration page from the AMW106's HTTP server
 - **Energy metering:** Accumulate kWh from current/voltage readings
 - **Scheduled charging:** Time-based charge windows via RAPI or WiFi
 - **Home Assistant integration:** MQTT discovery for auto-configuration
-- **OpenEVSE WiFi module replacement:** Swap AMW006 for ESP32 running OpenEVSE WiFi firmware (full web UI, MQTT, OCPP out of the box)
+- **OpenEVSE WiFi module replacement:** Swap AMW106 for ESP32 running OpenEVSE WiFi firmware (full web UI, MQTT, OCPP out of the box)
 
 ---
 
@@ -674,9 +790,28 @@ The stock AMW006 already runs a ZentriOS **HTTP server on port 80 with the `/com
 
 This port is based on OpenEVSE firmware from the `master` branch. All changes are gated behind `#ifdef JUICEBOX_GEN1` and do not affect other build targets. The goal is to submit upstream as a new board variant if the port proves stable.
 
-## Appendix C: AMW006 WiFi Module Backup
+## Appendix C: AMW106 WiFi Module Backup
 
-Full backup stored at `C:\AI\amw006_firmware_backup\` (16 files). Configuration dump at `C:\AI\amw006_config_backup.txt`. Internal firmware files (wiconnect.exe, upgrade_app.exe, wifi_fw.bin) are recoverable from Zentri DMS/OTA servers (verified alive as of 2026-02-27).
+> 🛑 **Corrected 2026-09-21 — the "16 files" are NOT a backup of this unit.** They match a
+> **dev board** byte-for-byte (WiConnect-2.2.0.12, built 2015-04-08, MAC `4C:55:CC:10:35:E5`),
+> not this charger (ZentriOS-WZ-3.6.4.0, `EMWERK-JB_1_1-1.4.0.28`, MAC `4C:55:CC:18:1D:09`).
+> They are also **web/config assets, not a firmware image** — no kernel, services or application
+> binary is present. Any checklist item reading "WiFi module firmware backed up" on the strength
+> of that folder was false.
+
+**What is actually held for the live unit:**
+
+| Artifact | Contents |
+|---|---|
+| `research/juicebox-module-backup-<date>/` | **97 files, 397,957 bytes**, pulled over plain HTTP — full charge history (`ECache_*`, `Events_*`), `ELife_1`, `index.html`, CA cert, and three of five system binaries (`sys/wifi_fw.bin`, `sys/safemode.bin`, `sys/wl_table.bin`) |
+| `research/amw006-live-config-*.txt` | Full `get all` dumps of the live module |
+| `research/emotorwerks-archive-8.9/` | Archived V8.9 board layout (`.rrb` + decompressed text) and stock `.hex` images — **V8.9, not 8.14** |
+
+**Not recoverable:** `JB1_0.zap` (the EVSE application), `sys/kernel.bin` and `sys/services.bin`
+all refuse `file_open`/`file_stat` and are not served over HTTP. Module firmware was historically
+obtainable from Zentri DMS/OTA (`dfu.zentri.com`), but that channel is cloud-gated and these
+devices are owned in the vendor's DMS account — treat it as unavailable. **Any change that
+displaces `JB1_0.zap` is irreversible.**
 
 ## Appendix D: Glossary
 

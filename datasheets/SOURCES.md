@@ -54,7 +54,7 @@ Last updated: 2026-07-14
 | 3c2 | valerun/JB_firmware_V8_9 | https://github.com/valerun/JB_firmware_V8_9 | JuiceBox firmware version 8.9 for 60A EVSE variant | Yes |
 | 3c3 | dcarter/JuiceBox_EVSE_Firmware | https://github.com/dcarter/JuiceBox_EVSE_Firmware | Community fork based on 8.9.3 sources with improvements and documentation | Yes |
 | 3c4 | enachb/juicebox-ev-charger-8.7.9 | https://github.com/enachb/juicebox-ev-charger-8.7.9 | Archived copy of JuiceBox firmware version 8.7.9 | Yes |
-| 3c5 | valerun/JuiceBox_EVSE_WiFi_programmer_Public | https://github.com/valerun/JuiceBox_EVSE_WiFi_programmer_Public | WiFi module programmer utility for JuiceBox AMW006 module | Yes |
+| 3c5 | valerun/JuiceBox_EVSE_WiFi_programmer_Public | https://github.com/valerun/JuiceBox_EVSE_WiFi_programmer_Public | WiFi module programmer utility for JuiceBox AMW106 module | Yes |
 
 ### 3d. JuiceBox Spec Sheets
 
@@ -175,7 +175,7 @@ Pin 5: RESET    Pin 6: GND
 
 ## 8. Gecko OS / ZentriOS Modules & Related Cloud-Tethered Devices
 
-The JuiceBox AMW006 runs ZentriOS-WZ (successor line: Gecko OS). The same OS family
+The JuiceBox's WiFi module (**AMW106** — see [FSD §2.3](../docs/OpenJuice-FSD.md) for part-number provenance) runs ZentriOS-WZ (successor line: Gecko OS). The same OS family
 powers the Generac Mobile Link Tether (WGM160P). These modules share the UDP 55555
 LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on.
 
@@ -241,6 +241,6 @@ LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on
 
 - **All resources listed above are freely accessible** as of February 2026.
 - The official SAE J1772 standard document itself is **not free** (available for purchase from SAE International), but the Wikipedia article and OpenEVSE references provide sufficient technical detail for implementation.
-- The AMW006 module is a legacy product (acquired by Silicon Labs from Zentri/ACKme); datasheets remain hosted on silabs.com.
+- The AMW006/AMW106 modules are legacy products (acquired by Silicon Labs from Zentri/ACKme); datasheets remain hosted on silabs.com. **Entry 2b is the combined AMW006/AMW106 ZentriOS datasheet and is the relevant one for this charger;** 2a and 2c cover AMW006 specifically and are retained because the dev board in `research/` genuinely is an AMW006 (`Board:AMW006-A01.1`, verified over serial 2026-09-21).
 - The JuiceBox Gen 1 uses an ATmega328P on an Arduino Pro Mini 5V carrier board, making it firmware-compatible with OpenEVSE which also targets ATmega328P at 16MHz.
 - The JuiceRescueController is the most directly relevant project to OpenJuice, as it provides a drop-in OpenEVSE-based replacement board for JuiceBox v1 and v2 hardware.
