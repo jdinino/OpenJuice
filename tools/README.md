@@ -5,7 +5,7 @@ ZentriOS/Gecko OS LAN protocols documented in
 [`../docs/ZentriOS-Gecko-LAN-Discovery.md`](../docs/ZentriOS-Gecko-LAN-Discovery.md)
 and [`../docs/Generac-MobileLink-Tether-RE.md`](../docs/Generac-MobileLink-Tether-RE.md).
 
-They work against **any** device in this OS family — the JuiceBox Gen 1 (AMW006)
+They work against **any** device in this OS family — the JuiceBox Gen 1 (AMW106)
 and the Generac Mobile Link Tether (WGM160P) both emit the same UDP 55555 beacon,
 so `beacon_extract.py` decodes either.
 
@@ -19,6 +19,23 @@ so `beacon_extract.py` decodes either.
 | **`pcap_overview.py`** | Whole-capture overview: time span, ethertype/L2 buckets, top `(proto, dstport)` histogram, all traffic to/from a device, and TCP SYNs (connection attempts). |
 | **`mdns_dump.py`** | Decode mDNS (UDP 5353) records a device emits — reveals whether it advertises any local service/port (PTR/SRV/TXT) or just claims a hostname. |
 | **`generac_provision.py`** | Full SoftAP provisioning client for the Generac Tether V2 API (`192.168.51.1`): `probe`, `scan`, `dump`, `connect`, `portscan`, `listen-udp`. Implements the `wifi_enable`-first join sequence (see Generac RE doc §3). |
+
+### Live monitoring (no pcap needed)
+
+| Script | What it does |
+|---|---|
+| **`generac_dashboard.py`** | Self-refreshing **text dashboard** for a Generac Tether already on your LAN. **Discovers** the device from its live UDP 55555 beacon (the IP is never hard-coded), **verifies** the discovered address four ways (beacon source match, ARP L2 binding, reverse-name resolution, TCP reachability), then presents identity/firmware, RF (RSSI + AP/channel), device clock drift, and the live state of every known local function (beacon, port 2000, Gecko `/command/*` HTTP) — each shown against its expected "locked" RE result. Optional read-only cloud status if a bearer token is present. Includes a firmware-`version` OTA tripwire. |
+
+```sh
+python generac_dashboard.py                 # live auto-refreshing dashboard
+python generac_dashboard.py --once          # one snapshot, then exit (scroll-friendly)
+python generac_dashboard.py --all           # show any Gecko/Zentri beacon, not just Generac
+python generac_dashboard.py --serial 3000627313   # + read-only cloud isRegistered (needs token)
+```
+
+Run it on a host on the **same subnet** as the device; allow inbound UDP 55555 in
+the host firewall if no beacon appears (the tool prints the exact `netsh` rule).
+Unlike the pcap tools above, this needs no capture — it listens on the LAN directly.
 
 ### APK / firmware analysis (stdlib zip parsing — used to build the [App Lineage](../docs/MobileLink-App-Lineage.md) doc)
 
