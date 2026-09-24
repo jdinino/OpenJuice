@@ -12,7 +12,7 @@ is an **AutoRest/Swagger-generated** class, `MobileLinkClient`, so every operati
 route template, and model is legible C#. The assemblies were extracted from the
 Xamarin **XABA assembly store** (`assemblies/assemblies.blob`), which stores each
 DLL **LZ4-compressed** (`XALZ`) — decompressed with a pure-Python LZ4 block decoder
-(no external deps). Tooling: [`../tools/xaba_extract.py`](../tools/), `route_config.py`.
+(no external deps). Tooling: [`../tools/xaba_extract.py`](../../tools/), `route_config.py`.
 
 This is the authoritative spec for the cloud path chosen for local-independent
 telemetry (register once → poll). The 2.x app uses `api/v2`; the current 3.x app
@@ -111,9 +111,9 @@ Property names straight off the DTO backing fields — these are the metrics a G
 ## 6. Reproduce
 
 ```sh
-python tools/list_entries.py  "Mobile Link ... 2.28.0 ....apk"   # find the XABA blob
-python tools/xaba_extract.py                                     # decompress + mine Generac DLLs
-python tools/route_config.py                                     # dump route templates + config
+python tools/generac/list_entries.py  "Mobile Link ... 2.28.0 ....apk"   # find the XABA blob
+python tools/generac/xaba_extract.py                                     # decompress + mine Generac DLLs
+python tools/generac/route_config.py                                     # dump route templates + config
 ```
 
 > All routes/fields here are reverse-engineered from a publicly downloadable APK for

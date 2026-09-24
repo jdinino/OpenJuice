@@ -6,7 +6,7 @@ WHY THIS EXISTS
   eMotorWerks never published a schematic for any JuiceBox PCB, and released source only up to
   revision 8.10. This unit is PCB 8.14+, so its pin assignments are not documented anywhere and
   must be recovered from the firmware itself before OpenEVSE can safely be flashed onto it
-  (see docs/OpenJuice-FSD.md risk R8 -- a wrong relay or GFI pin on a 40 A circuit is the failure
+  (see docs/juicebox/OpenJuice-FSD.md risk R8 -- a wrong relay or GFI pin on a 40 A circuit is the failure
   mode that matters).
 
 HOW IT WORKS
@@ -228,7 +228,7 @@ def main():
             print("   %-46s x%d" % (k, v))
         print()
     print("Reminder: this shows how the firmware USES each pin, not what it is wired to.")
-    print("Confirm electrically before flashing -- see docs/OpenJuice-FSD.md R8.")
+    print("Confirm electrically before flashing -- see docs/juicebox/OpenJuice-FSD.md R8.")
 
 
 if __name__ == "__main__":

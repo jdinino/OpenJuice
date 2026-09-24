@@ -133,7 +133,7 @@ Flash the ATmega328P MCU with OpenEVSE firmware, remapping pins to match JuiceBo
 > mains circuit is the failure mode that actually matters.
 >
 > Recovering the map from the stock firmware image was evaluated as a shortcut and is **not
-> sufficient on its own**. `tools/avr_pinmap.py`, calibrated against the published `firmware_8.9.hex`,
+> sufficient on its own**. `tools/juicebox/avr_pinmap.py`, calibrated against the published `firmware_8.9.hex`,
 > recovered the Timer1/pilot pins and the peripheral configuration but missed the relay, GFI sense,
 > GFI test and latch reset — the stock firmware reaches those through Arduino's `digitalWrite()`
 > with a variable pin number, which compiles to indirect register access. A linear opcode scan also
@@ -690,7 +690,7 @@ $FD          # disable charging
 |---|---|---|---|
 | W1 | SoftwareSerial interrupts interfere with pilot PWM timing | Medium | Test with scope; SoftwareSerial at 9600 has short ISRs |
 | W2 | Flash/RAM overhead of SoftwareSerial library | Low | SoftwareSerial adds ~1.5KB flash, ~70 bytes RAM; v0.1 uses 40.5% flash |
-| W3 | ~~AMW106 stream mode TCP port unknown~~ **Resolved** | Low | **Confirmed port 2000** — the live JuiceBox's UDP 55555 beacon advertises `remote_terminal_port: 2000` (§9.9; [discovery doc](ZentriOS-Gecko-LAN-Discovery.md)) |
+| W3 | ~~AMW106 stream mode TCP port unknown~~ **Resolved** | Low | **Confirmed port 2000** — the live JuiceBox's UDP 55555 beacon advertises `remote_terminal_port: 2000` (§9.9; [discovery doc](../ZentriOS-Gecko-LAN-Discovery.md)) |
 | W4 | No authentication on TCP connection | Medium | AMW106 is on local WiFi only; add `http.server.password` if needed |
 
 ### 9.8 Prerequisites
@@ -705,7 +705,7 @@ $FD          # disable charging
 
 ### 9.9 Local Discovery & Health Monitoring (UDP 55555 Beacon)
 
-The AMW106 — like all ZentriOS/Gecko OS modules — broadcasts a JSON **discovery beacon on UDP 55555** every ~10 seconds. This removes the need to hardcode the JuiceBox IP (§9.6) and provides a passive health feed **with zero changes to the AMW106 or the ATmega firmware**. Full protocol spec and live captures: [ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md).
+The AMW106 — like all ZentriOS/Gecko OS modules — broadcasts a JSON **discovery beacon on UDP 55555** every ~10 seconds. This removes the need to hardcode the JuiceBox IP (§9.6) and provides a passive health feed **with zero changes to the AMW106 or the ATmega firmware**. Full protocol spec and live captures: [ZentriOS-Gecko-LAN-Discovery.md](../ZentriOS-Gecko-LAN-Discovery.md).
 
 Verified beacon from a live JuiceBox Gen 1:
 
@@ -735,7 +735,7 @@ The beacon's `remote_terminal_port` (2000) is the single TCP port used by both t
 
 #### 9.9.2 Health telemetry from the beacon (no firmware change)
 
-The beacon is itself a monitoring feed. A ~30-line UDP listener (see [`tools/beacon_extract.py`](../tools/beacon_extract.py)) can publish these to MQTT alongside the RAPI-tunneled charging data:
+The beacon is itself a monitoring feed. A ~30-line UDP listener (see [`tools/beacon_extract.py`](../../tools/beacon_extract.py)) can publish these to MQTT alongside the RAPI-tunneled charging data:
 
 | Beacon field | Metric | Home Assistant entity |
 |---|---|---|
@@ -756,7 +756,7 @@ Note the beacon clock free-runs and drifts (~0.7 %), so treat `time` as a livene
 | D3 | The client SHALL use the beacon's `ip` + `remote_terminal_port` for the RAPI TCP connection (§9.6) rather than a hardcoded address |
 | D4 | The client MAY publish `rssi` and online-state as diagnostic sensors |
 
-**Constraint:** the beacon is a limited broadcast (`255.255.255.255`), so the listener must sit on the **same L2 segment** as the JuiceBox — or capture on the router/AP bridge (see [discovery doc §5](ZentriOS-Gecko-LAN-Discovery.md#5-capturing-the-beacon-router--ap-side)).
+**Constraint:** the beacon is a limited broadcast (`255.255.255.255`), so the listener must sit on the **same L2 segment** as the JuiceBox — or capture on the router/AP bridge (see [discovery doc §5](../ZentriOS-Gecko-LAN-Discovery.md#5-capturing-the-beacon-router--ap-side)).
 
 ---
 
@@ -770,7 +770,7 @@ An OpenEVSE-style HTML interface is therefore possible **without flashing the AT
 
 **What this path cannot do on its own.** Live status (voltage, current, power, charging state) and current control exist **only** in the JuiceNet UDP stream the ATmega generates; the module is a pipe for that stream and exposes none of it — `help commands` returns pure stock ZentriOS with nothing charger-related. Both therefore require something acting as the JuiceNet server: this PC, a Pi, or (post-port) the module itself in stream mode. Note also there is **no start/stop opcode** — the `C` field is not an opcode table, and pausing is done by sending online current `A=0` (which resets session energy and cycles the contactor).
 
-The proven route for live status and control is redirecting the JuiceNet UDP telemetry — v07 packet format decoded in [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md) — to a local collector (`tools/juicebox_rawcap.py`, or [`JuiceRescue/juicepassproxy`](../datasheets/SOURCES.md)), which replies as the JuiceNet server. **The reply must be sourced from the exact IP:port the device addresses** — verified on this unit, where spoofing that source produced five confirmed current changes.
+The proven route for live status and control is redirecting the JuiceNet UDP telemetry — v07 packet format decoded in [JuiceBox-Gen1-Pentest-RE.md](JuiceBox-Gen1-Pentest-RE.md) — to a local collector (`tools/juicebox/juicebox_rawcap.py`, or [`JuiceRescue/juicepassproxy`](../../datasheets/SOURCES.md)), which replies as the JuiceNet server. **The reply must be sourced from the exact IP:port the device addresses** — verified on this unit, where spoofing that source produced five confirmed current changes.
 
 *Why* that is required is inferred rather than established here: juicepassproxy issue #149 reports that the firmware honours commands only after completing its `directory-api.emotorwerks.com` handshake **and** only from the endpoint that handshake named. **That finding is from an EO Mini Pro rebadge (`EMWERK-JEO2`), not from `EMWERK-JB_1_1`, and is unconfirmed on this hardware.** It is consistent with our observations but has not been isolated. One practical consequence if it holds: blocking the directory server — sometimes recommended to prevent the encryption switch — could stop the device accepting *any* commands after its next reboot.
 

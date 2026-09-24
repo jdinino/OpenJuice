@@ -18,7 +18,7 @@ TCP reachability) before anything is shown as trustworthy.
 
 Every field here is grounded in the repo's reverse engineering:
   docs/ZentriOS-Gecko-LAN-Discovery.md   (beacon schema, port 2000, mDNS)
-  docs/Generac-MobileLink-Tether-RE.md   (locked local surface, cloud API)
+  docs/generac/Generac-MobileLink-Tether-RE.md   (locked local surface, cloud API)
 
 Stdlib only. No admin/root required. Works on Windows, macOS, Linux.
 

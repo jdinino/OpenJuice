@@ -11,7 +11,7 @@ The JuiceBox Gen 1 WiFi module (Zentri **AMW106**) and the Generac Mobile Link T
 
 This matters for OpenJuice directly:
 
-- The beacon is a **zero-touch way to find the JuiceBox's IP** on the LAN — no port scan, no router login. This is the missing auto-discovery piece for the [v0.2 WiFi RAPI tunneling](OpenJuice-FSD.md#9-v02--wifi-rapi-tunneling-via-AMW106) feature, which connects to the AMW106 on **port 2000** (the same `remote_terminal_port` the beacon advertises).
+- The beacon is a **zero-touch way to find the JuiceBox's IP** on the LAN — no port scan, no router login. This is the missing auto-discovery piece for the [v0.2 WiFi RAPI tunneling](juicebox/OpenJuice-FSD.md#9-v02--wifi-rapi-tunneling-via-AMW106) feature, which connects to the AMW106 on **port 2000** (the same `remote_terminal_port` the beacon advertises).
 - The beacon carries **RSSI, uptime clock, firmware version, and the AP it's joined to** — a free local telemetry/health feed for a JuiceBox running stock WiFi firmware, requiring **zero changes to the AMW106**.
 
 Everything here was captured live from a home LAN that happened to host **both** a JuiceBox and a Generac Tether at once, giving a clean side-by-side of the two firmware generations.
@@ -63,7 +63,7 @@ Everything here was captured live from a home LAN that happened to host **both**
 }
 ```
 
-> **FSD correction:** [OpenJuice-FSD §2.3](OpenJuice-FSD.md#23-wifi-module-not-modified) lists the AMW106 firmware as *WiConnect 2.2.0.12*. The live unit reports **`ZentriOS-WZ-3.6.4.0`** with the eMotorWerks app layer **`EMWERK-JB_1_1-1.4.0.28`** (built 2021-04-27). ZentriOS-WZ is the "WiZnet"/JuiceBox variant. v0.2 planning should target the ZentriOS 3.6 command set, not WiConnect 2.2.
+> **FSD correction:** [OpenJuice-FSD §2.3](juicebox/OpenJuice-FSD.md#23-wifi-module-not-modified) lists the AMW106 firmware as *WiConnect 2.2.0.12*. The live unit reports **`ZentriOS-WZ-3.6.4.0`** with the eMotorWerks app layer **`EMWERK-JB_1_1-1.4.0.28`** (built 2021-04-27). ZentriOS-WZ is the "WiZnet"/JuiceBox variant. v0.2 planning should target the ZentriOS 3.6 command set, not WiConnect 2.2.
 
 ### 2.4 Live sample — Generac Mobile Link Tether (WGM160P)
 

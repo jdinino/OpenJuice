@@ -175,7 +175,7 @@ Pin 5: RESET    Pin 6: GND
 
 ## 8. Gecko OS / ZentriOS Modules & Related Cloud-Tethered Devices
 
-The JuiceBox's WiFi module (**AMW106** — see [FSD §2.3](../docs/OpenJuice-FSD.md) for part-number provenance) runs ZentriOS-WZ (successor line: Gecko OS). The same OS family
+The JuiceBox's WiFi module (**AMW106** — see [FSD §2.3](../docs/juicebox/OpenJuice-FSD.md) for part-number provenance) runs ZentriOS-WZ (successor line: Gecko OS). The same OS family
 powers the Generac Mobile Link Tether (WGM160P). These modules share the UDP 55555
 LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on.
 
@@ -184,7 +184,7 @@ LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on
 | # | Name | Path | Description | Free |
 |---|------|------|-------------|------|
 | 8a1 | ZentriOS/Gecko OS LAN Discovery Beacon | [../docs/ZentriOS-Gecko-LAN-Discovery.md](../docs/ZentriOS-Gecko-LAN-Discovery.md) | UDP 55555 JSON beacon spec, port 2000, capture method — verified on live JuiceBox + Generac hardware | Yes |
-| 8a2 | Generac Mobile Link Tether RE Notes | [../docs/Generac-MobileLink-Tether-RE.md](../docs/Generac-MobileLink-Tether-RE.md) | Gecko OS provisioning API, locked local surface, cloud REST/B2C map — sister case to the JuiceBox | Yes |
+| 8a2 | Generac Mobile Link Tether RE Notes | [../docs/Generac-MobileLink-Tether-RE.md](../docs/generac/Generac-MobileLink-Tether-RE.md) | Gecko OS provisioning API, locked local surface, cloud REST/B2C map — sister case to the JuiceBox | Yes |
 | 8a3 | RE tools (stdlib Python) | [../tools/](../tools/) | Beacon/pcap decoders + Gecko OS provisioning client; `beacon_extract.py` decodes JuiceBox and Generac beacons | Yes |
 
 ### 8b. Silicon Labs Gecko OS / WGM160P (portal)
@@ -217,9 +217,9 @@ LAN discovery beacon and the stream-mode port 2000 that OpenJuice v0.2 relies on
 | Source | APKPure — `com.generac.standbystatus` v3.16.0 |
 | Framework | React Native / Hermes bytecode; bundle at `assets/index.android.bundle` (9,002,548 bytes, magic `c61fbc03…`) |
 | Cleartext rule | Network Security Config `res/8G.xml` permits HTTP only to `192.168.51.1` |
-| Endpoints present | SoftAP V2 provisioning + `app.mobilelinkgen.com` cloud/B2C — see [../docs/Generac-MobileLink-Tether-RE.md](../docs/Generac-MobileLink-Tether-RE.md) |
+| Endpoints present | SoftAP V2 provisioning + `app.mobilelinkgen.com` cloud/B2C — see [../docs/Generac-MobileLink-Tether-RE.md](../docs/generac/Generac-MobileLink-Tether-RE.md) |
 
-**Legacy generations analyzed** — full history in [../docs/MobileLink-App-Lineage.md](../docs/MobileLink-App-Lineage.md):
+**Legacy generations analyzed** — full history in [../docs/MobileLink-App-Lineage.md](../docs/generac/MobileLink-App-Lineage.md):
 
 | Version | File | Size (bytes) | SHA-256 | Framework / provisioning |
 |---|---|---|---|---|

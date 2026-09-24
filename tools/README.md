@@ -3,7 +3,7 @@
 Pure-Python (stdlib only, no pip installs) utilities used to reverse-engineer the
 ZentriOS/Gecko OS LAN protocols documented in
 [`../docs/ZentriOS-Gecko-LAN-Discovery.md`](../docs/ZentriOS-Gecko-LAN-Discovery.md)
-and [`../docs/Generac-MobileLink-Tether-RE.md`](../docs/Generac-MobileLink-Tether-RE.md).
+and [`../docs/Generac-MobileLink-Tether-RE.md`](../docs/generac/Generac-MobileLink-Tether-RE.md).
 
 They work against **any** device in this OS family — the JuiceBox Gen 1 (AMW106)
 and the Generac Mobile Link Tether (WGM160P) both emit the same UDP 55555 beacon,
@@ -57,7 +57,7 @@ only *has* two, proving a linear scan cannot separate code from flash data table
 flags that pattern itself. Treat output as corroboration for a hypothesis you already hold; establish
 safety-critical pins electrically, or with a real disassembler that follows control flow.
 
-### APK / firmware analysis (stdlib zip parsing — used to build the [App Lineage](../docs/MobileLink-App-Lineage.md) doc)
+### APK / firmware analysis (stdlib zip parsing — used to build the [App Lineage](../docs/generac/MobileLink-App-Lineage.md) doc)
 
 These take an APK path as `argv[1]`. They detect the app framework and mine
 endpoints across the three Mobile Link generations (native / Xamarin / React Native).
@@ -72,7 +72,7 @@ endpoints across the three Mobile Link generations (native / Xamarin / React Nat
 | **`verify_apk.py`** | Confirm a downloaded APK matches an analyzed build (size, SHA-256, bundle magic, endpoint markers). |
 | **`xaba_explore.py`** | Parse the Xamarin **XABA** assembly-store header/descriptors + manifest to locate assemblies by name. |
 | **`xaba_extract.py`** | Extract + **LZ4-decompress** (pure-Python `XALZ` block decoder) the Generac .NET assemblies from `assemblies.blob` and mine them for endpoints/auth/models. |
-| **`route_config.py`** | Dump the literal REST route templates + base URLs + B2C config from the decompressed assemblies. Produced the [Cloud API doc](../docs/MobileLink-Cloud-API.md). |
+| **`route_config.py`** | Dump the literal REST route templates + base URLs + B2C config from the decompressed assemblies. Produced the [Cloud API doc](../docs/generac/MobileLink-Cloud-API.md). |
 | **`verify_analysis.py`** | Re-test the load-bearing claims against the 3.x APK: Network Security Config cleartext scope, and whether telemetry has any local (vs cloud) source. |
 | **`ble_check.py`** | Inspect the Xamarin BLE service — confirms the local Bluetooth telemetry mode is **portable-generator only**, not the standby WiFi Tether. |
 | **`dotnet_inspect.py`** | Parse the .NET `#Strings` heap for the sent/stored/undo review (request DTOs, PII field inventory, delete/remove ops). |

@@ -53,16 +53,16 @@ rehearsal target. Details, gates and the current state: [docs/STATUS.md](docs/ST
 | Document | What it covers |
 |---|---|
 | [STATUS.md](docs/STATUS.md) | Goal, constraints, where things stand, next steps, interim control procedure |
-| [OpenJuice-FSD.md](docs/OpenJuice-FSD.md) | Functional specification for the port: hardware, per-revision pin maps, build, commissioning, risks |
-| [JuiceBox-Gen1-Pentest-RE.md](docs/JuiceBox-Gen1-Pentest-RE.md) | Security assessment and protocol reverse engineering of the live unit |
+| [OpenJuice-FSD.md](docs/juicebox/OpenJuice-FSD.md) | Functional specification for the port: hardware, per-revision pin maps, build, commissioning, risks |
+| [JuiceBox-Gen1-Pentest-RE.md](docs/juicebox/JuiceBox-Gen1-Pentest-RE.md) | Security assessment and protocol reverse engineering of the live unit |
 | [ZentriOS-Gecko-LAN-Discovery.md](docs/ZentriOS-Gecko-LAN-Discovery.md) | The UDP 55555 discovery beacon shared by ZentriOS and Gecko OS devices |
 | [datasheets/SOURCES.md](datasheets/SOURCES.md) | Datasheets and reference sources |
 
 The repository also holds a sister project, reverse engineering of the Generac Mobile Link Tether,
 which runs the same WiFi OS family. It is documented in
-[Generac-MobileLink-Tether-RE.md](docs/Generac-MobileLink-Tether-RE.md),
-[MobileLink-App-Lineage.md](docs/MobileLink-App-Lineage.md) and
-[MobileLink-Cloud-API.md](docs/MobileLink-Cloud-API.md).
+[Generac-MobileLink-Tether-RE.md](docs/generac/Generac-MobileLink-Tether-RE.md),
+[MobileLink-App-Lineage.md](docs/generac/MobileLink-App-Lineage.md) and
+[MobileLink-Cloud-API.md](docs/generac/MobileLink-Cloud-API.md).
 
 ## Safety
 

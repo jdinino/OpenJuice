@@ -9,7 +9,7 @@ the charge current (set), after which the next telemetry confirms the change (ve
 
   Protocol/field decode + CRC ported faithfully from the JuiceRescue project
   (juicepassproxy: juicebox_message.py / juicebox_crc.py), which is the mature
-  reverse engineering of the JuiceNet UDP protocol. See docs/JuiceBox-Gen1-Pentest-RE.md.
+  reverse engineering of the JuiceNet UDP protocol. See docs/juicebox/JuiceBox-Gen1-Pentest-RE.md.
 
 Redirect the charger's telemetry host to this PC on your router (NO writes to the
 charger). For CONTROL, use the DNS-override redirect so the charger addresses THIS host

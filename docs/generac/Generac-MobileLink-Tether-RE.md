@@ -8,14 +8,14 @@
 
 ## 1. Why this is in the OpenJuice repo
 
-This is a **sister case** to the JuiceBox: another cloud-tethered consumer device built on the **same OS family** (Gecko OS is the successor to the ZentriOS/WiConnect stack the JuiceBox's AMW106 runs). Same discovery beacon ([ZentriOS-Gecko-LAN-Discovery.md](ZentriOS-Gecko-LAN-Discovery.md)), same port-2000 concept, same "the hardware is fine, the cloud is the leash" problem OpenJuice exists to solve.
+This is a **sister case** to the JuiceBox: another cloud-tethered consumer device built on the **same OS family** (Gecko OS is the successor to the ZentriOS/WiConnect stack the JuiceBox's AMW106 runs). Same discovery beacon ([ZentriOS-Gecko-LAN-Discovery.md](../ZentriOS-Gecko-LAN-Discovery.md)), same port-2000 concept, same "the hardware is fine, the cloud is the leash" problem OpenJuice exists to solve.
 
 The contrast is instructive:
 
 - **JuiceBox** left stream-mode **port 2000 open** → locally controllable (that's what OpenJuice v0.2 exploits).
 - **Generac** **locked every local interface** → it is a pure cloud relay. The reverse engineering below documents exactly *how* locked, and what remains reachable.
 
-The provisioning tool and packet-analysis scripts developed here live in [`tools/`](../tools/) and are reusable against any Gecko OS / ZentriOS device.
+The provisioning tool and packet-analysis scripts developed here live in [`tools/`](../../tools/) and are reusable against any Gecko OS / ZentriOS device.
 
 ---
 
@@ -69,10 +69,10 @@ The device ships with `wifi_enable: false`. If you push WLAN credentials without
 - `bssid = 00:00:00:00:00:00` and `channel = 0` are the Gecko OS "any AP with this SSID / scan all channels" sentinels — leave them unpinned so the module can find the AP on any channel.
 - The `/status` `reason` codes are Gecko OS WLAN join states; `12/13` = scanning/associating, cleared once the interface is enabled.
 
-This whole sequence is implemented in [`tools/generac_provision.py`](../tools/generac_provision.py) as the `connect` subcommand:
+This whole sequence is implemented in [`tools/generac/generac_provision.py`](../../tools/generac/generac_provision.py) as the `connect` subcommand:
 
 ```sh
-python tools/generac_provision.py connect "YourSSID" "YourPassword"
+python tools/generac/generac_provision.py connect "YourSSID" "YourPassword"
 ```
 
 ### 3.2 DHCP gotcha — sleepy-client OFFER loss
@@ -99,7 +99,7 @@ Once on the LAN, the Tether exposes **nothing** useful locally. Verified by port
 | mDNS service records | none — hostname claim only (`gecko_os-8EA.local`) |
 | **UDP 55555 beacon** | **the only local data** — presence, RSSI, uptime, firmware |
 
-Over a full boot the device made **zero** outbound cloud connections (no DNS, NTP, TCP, or TLS) **in its bypass-provisioned, unregistered state** — because the *account registration* step, not the WiFi step, is what hands the module its Azure identity. See [ZentriOS-Gecko-LAN-Discovery.md §6](ZentriOS-Gecko-LAN-Discovery.md#6-other-lan-chatter-observed).
+Over a full boot the device made **zero** outbound cloud connections (no DNS, NTP, TCP, or TLS) **in its bypass-provisioned, unregistered state** — because the *account registration* step, not the WiFi step, is what hands the module its Azure identity. See [ZentriOS-Gecko-LAN-Discovery.md §6](../ZentriOS-Gecko-LAN-Discovery.md#6-other-lan-chatter-observed).
 
 **Conclusion:** with the local surface locked, the beacon is the offline-monitoring ceiling. Deep telemetry (battery, fuel, run-hours, faults) only exists in the cloud channel, which requires registration.
 
@@ -114,7 +114,7 @@ The **standby** path is different: `Is_Connected_To_MLG_Wifi_AP`, `ConnectFromDe
 | **Portable** generator (BLE comm module) | ✅ yes — phone reads faults/status/CO over Bluetooth |
 | **Standby** generator + WiFi **Tether** (WGM160P) | ❌ none — cloud only |
 
-For a standby unit there is **no local shortcut** (no hidden API, no BLE), so cloud registration is genuinely required for deep telemetry. Reproduce: `tools/verify_analysis.py`, `tools/ble_check.py`.
+For a standby unit there is **no local shortcut** (no hidden API, no BLE), so cloud registration is genuinely required for deep telemetry. Reproduce: `tools/generac/verify_analysis.py`, `tools/generac/ble_check.py`.
 
 ---
 
