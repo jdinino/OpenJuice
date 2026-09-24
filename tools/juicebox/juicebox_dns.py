@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-juicebox_dns.py -- tiny local DNS resolver to redirect ONE hostname to this PC.
+juicebox_dns.py -- tiny local DNS resolver that points the JuiceNet hostnames at this PC.
 
 Purpose: make the JuiceBox resolve its JuiceNet telemetry host to this machine, so
 its UDP telemetry (and our command replies) flow here -- without touching the router.
@@ -11,13 +11,16 @@ re-resolve. All non-matching queries are forwarded to a real upstream DNS unchan
 Binds UDP :53 -> needs admin/root. On Windows run from an elevated shell.
 
 Usage:
-  python juicebox_dns.py                       # hijack the JuiceNet host -> this PC
+  python juicebox_dns.py                       # hijack both JuiceNet hosts -> this PC
   python juicebox_dns.py --to 192.168.1.74 --upstream 192.168.1.1
   python juicebox_dns.py --map host=ip --map host2=ip2
 """
 import argparse, socket, struct, sys, time
 
-DEFAULT_HOST = "juicenet-udp-prod5-usa.enelx.com"
+# The charger resolves whichever name its directory handshake left it with; on the
+# reference unit that is jbv1.emotorwerks.com. Hijacking only the Enel X name let the
+# lookup fall through to the real cloud, silently defeating the redirect.
+DEFAULT_HOSTS = ("jbv1.emotorwerks.com", "juicenet-udp-prod5-usa.enelx.com")
 
 
 def lan_ip():
@@ -62,7 +65,7 @@ def main():
     args = ap.parse_args()
 
     me = args.to or lan_ip()
-    table = {DEFAULT_HOST: me}
+    table = {h: me for h in DEFAULT_HOSTS}
     for m in args.map:
         h, _, ip = m.partition("=")
         if h and ip:

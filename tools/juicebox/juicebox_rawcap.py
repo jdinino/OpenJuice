@@ -34,7 +34,7 @@ import socket
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from juicebox_collector import parse, render, build_command  # noqa: E402
+from juicebox_collector import parse, render, build_command, OneShot  # noqa: E402
 
 try:
     from scapy.all import (sniff, sendp, Ether, IP, UDP, Raw, conf,
@@ -92,6 +92,9 @@ class State:
         self.iface = iface
         self.counter = 0
         self.m_seen = []
+        self.oneshot = (OneShot(args.set_online, args.set_offline, command=args.command,
+                                new_version=args.new_version)
+                        if args.set_online is not None else None)
 
 
 def make_reply(pkt, cmd_bytes):
@@ -123,16 +126,19 @@ def handle(pkt, st, logf):
     if "M" in r[2]:
         st.m_seen.append(r[2]["M"])
     a = st.args
-    if a.set_online is not None:
-        st.counter = st.counter + 1 if st.counter < 999 else 1
-        off = a.set_offline
-        cmd = build_command(a.set_online, off, st.counter,
-                            command=a.command, new_version=a.new_version)
-        if a.send:
+    o = st.oneshot
+    if o is not None and o.state not in ("done", "unchanged", "failed"):
+        cmd = o.on_frame(r[2])
+        if cmd and a.send:
             sendp(make_reply(pkt, cmd.encode()), iface=st.iface, verbose=0)
-            print("    >> SENT (spoofed src %s:%d): %s" % (pkt[IP].dst, pkt[UDP].dport, cmd))
-        else:
+            st.counter += 1
+            print("    >> SENT (spoofed src %s:%d, attempt %d): %s"
+                  % (pkt[IP].dst, pkt[UDP].dport, o.attempts, cmd))
+        elif cmd:
             print("    >> would send (dry run): %s" % cmd)
+            o.state = "done"
+        if o.state in ("done", "unchanged", "failed") and a.send:
+            print("    >> " + o.describe())
     print()
 
 

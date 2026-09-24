@@ -27,7 +27,8 @@ Usage:
 """
 import argparse, datetime, re, socket, sys, time
 
-JUICENET_HOST = "juicenet-udp-prod5-usa.enelx.com"
+JUICENET_HOSTS = ("jbv1.emotorwerks.com", "juicenet-udp-prod5-usa.enelx.com")
+JUICENET_HOST = JUICENET_HOSTS[1]   # kept for older callers
 DEFAULT_PORT = 8042
 SAMPLE = ("0817081001070449032218248303:v07,s0001,u38100,V2436,L0026201508,"
           "S1,T00,M25,m40,t09,i28,e-001,f6000,X0,Y0")
@@ -148,6 +149,69 @@ def build_command(online_amps, offline_amps, counter, command=6, new_version=Fal
     return "%s!%s$" % (payload, CRC.base35(payload))
 
 
+class OneShot:
+    """Send one current-limit command, confirm it, then stop.
+
+    The charger echoes the S sequence number of the last command it accepted in the
+    telemetry `s` field. The old behaviour replied to EVERY frame, which rewrote the
+    EEPROM-backed offline limit roughly every 9 s. This sends once, resends only if no
+    acknowledgement arrives within WAIT_FRAMES frames, and gives up after MAX_ATTEMPTS.
+    If the online limit (`M`) already equals the target it sends nothing, unless force
+    is set; v07 telemetry does not report the offline limit, so use force to rewrite it.
+    """
+    MAX_ATTEMPTS = 3
+    WAIT_FRAMES = 2
+
+    def __init__(self, online, offline, command=6, new_version=False, force=False):
+        self.online, self.offline = online, offline
+        self.command, self.new_version, self.force = command, new_version, force
+        self.seq = None
+        self.attempts = 0
+        self.waited = 0
+        self.state = "pending"            # pending | sent | done | unchanged | failed
+
+    def on_frame(self, fields):
+        """Feed one parsed telemetry frame. Returns a command string to send now, or None."""
+        if self.state in ("done", "unchanged", "failed"):
+            return None
+        ack = fields.get("s")
+        if self.state == "pending":
+            if not self.force and fields.get("M") is not None and int(fields["M"]) == self.online:
+                self.state = "unchanged"
+                return None
+            try:
+                current = int(ack)
+            except (TypeError, ValueError):
+                current = 0
+            self.seq = current % 999 + 1  # differs from the charger's current ack
+            return self._send()
+        if ack is not None and int(ack) == self.seq:
+            self.state = "done"
+            return None
+        self.waited += 1
+        if self.waited < self.WAIT_FRAMES:
+            return None
+        if self.attempts >= self.MAX_ATTEMPTS:
+            self.state = "failed"
+            return None
+        return self._send()
+
+    def _send(self):
+        self.attempts += 1
+        self.waited = 0
+        self.state = "sent"
+        return build_command(self.online, self.offline, self.seq,
+                             command=self.command, new_version=self.new_version)
+
+    def describe(self):
+        return {"done": "ACKNOWLEDGED as S%03d after %d attempt(s); no further commands will be sent",
+                "unchanged": "online limit already at target; nothing sent (use --force to rewrite)",
+                "failed": "NOT acknowledged after %d attempts; stopped sending",
+                }.get(self.state, self.state) % (
+                    (self.seq, self.attempts) if self.state == "done" else
+                    (self.attempts,) if self.state == "failed" else ())
+
+
 # --------------------------------- helpers ---------------------------------- #
 def lan_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -163,10 +227,10 @@ def redirect_help(ip, port):
     return "\n".join([
         "-" * 72,
         "Redirect the charger's telemetry to this host (no writes to the charger).",
-        "For CONTROL use the DNS override so the charger addresses THIS host directly:",
-        "  DD-WRT > Services > DNSMasq > Additional DNSMasq Options:",
-        "      address=/%s/%s" % (JUICENET_HOST, ip),
-        "  then power-cycle the JuiceBox so it re-resolves.",
+        "For CONTROL the charger must address THIS host. Either run juicebox_dns.py here",
+        "(and point the charger's DNS at this host), or add router DNS overrides for:",
+        "      %s" % "  ".join(JUICENET_HOSTS),
+        "Procedure: docs/STATUS.md, 'Interim local control'.",
         "",
         "This host: %s   listening udp/%d" % (ip, port),
         "-" * 72,
@@ -201,12 +265,14 @@ def main():
     ap.add_argument("--log")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--set-online", type=int, metavar="AMPS",
-                    help="reply to each telemetry with a command setting the ONLINE max current")
+                    help="set the ONLINE max current (sent once, confirmed, then stops)")
     ap.add_argument("--set-offline", type=int, metavar="AMPS",
                     help="also set the OFFLINE max current (defaults to the online value)")
     ap.add_argument("--command", type=int, default=6, help="C field (default 6)")
     ap.add_argument("--new-version", action="store_true",
                     help="use 4/3-digit amperage format (newer firmware); default 2/2 for v07")
+    ap.add_argument("--force", action="store_true",
+                    help="send even if the online limit already matches (rewrites offline in EEPROM)")
     ap.add_argument("--send", action="store_true",
                     help="ACTUALLY transmit the command to the charger (else dry run)")
     args = ap.parse_args()
@@ -231,7 +297,11 @@ def main():
     print("waiting for telemetry... (Ctrl-C to stop)\n")
 
     logf = open(args.log, "a", encoding="utf-8") if args.log else None
-    counter = 0
+    oneshot = None
+    if args.set_online is not None:
+        oneshot = OneShot(args.set_online,
+                          args.set_offline if args.set_offline is not None else args.set_online,
+                          command=args.command, new_version=args.new_version, force=args.force)
     last = None
     try:
         while True:
@@ -248,16 +318,16 @@ def main():
             cad = "" if last is None else "  (+%.1fs)" % (now - last)
             last = now
             print(render(r[0], r[1], r[2], addr[0]) + cad)
-            if args.set_online is not None:
-                counter = counter + 1 if counter < 999 else 1
-                off = args.set_offline if args.set_offline is not None else args.set_online
-                cmd = build_command(args.set_online, off, counter,
-                                    command=args.command, new_version=args.new_version)
-                if args.send:
+            if oneshot is not None and oneshot.state not in ("done", "unchanged", "failed"):
+                cmd = oneshot.on_frame(r[2])
+                if cmd and args.send:
                     s.sendto(cmd.encode(), addr)
-                    print("    >> SENT command: %s" % cmd)
-                else:
+                    print("    >> SENT (attempt %d): %s" % (oneshot.attempts, cmd))
+                elif cmd:
                     print("    >> would send (dry run): %s" % cmd)
+                    oneshot.state = "done"
+                if oneshot.state in ("done", "unchanged", "failed") and args.send:
+                    print("    >> " + oneshot.describe())
             print()
     except KeyboardInterrupt:
         print("\nstopped.")
