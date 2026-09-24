@@ -27,7 +27,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from juicebox_collector import OneShot, parse  # noqa: E402
 
-STATUS = {"0": "unplugged", "1": "plugged in", "2": "charging", "3": "error"}
+STATUS = {"0": "unplugged", "1": "plugged in", "2": "charging", "5": "error"}
 J1772_MIN, HARD_MAX = 6, 40
 
 
