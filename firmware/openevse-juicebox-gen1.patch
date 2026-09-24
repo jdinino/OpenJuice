@@ -1,3 +1,20 @@
+OpenJuice patch for OpenEVSE: JuiceBox Gen 1 target (JUICEBOX_GEN1)
+
+WARNING: DO NOT FLASH THIS BUILD TO A REAL CHARGER YET.
+
+The pin map in this patch is the PCB V8.9 map, taken from eMotorWerks' V8.9 source.
+eMotorWerks' own V8.10.7 source and its v8.12 factory test firmware show the map changed
+at V8.10 and again at v8.12, including the main relay, current sensing and GFI test pins.
+The reference unit is PCB 8.14 or later, whose map is not published.
+
+Before this patch may be flashed anywhere:
+  1. read the board revision from the side sticker,
+  2. dump the stock flash and EEPROM and verify the dump,
+  3. establish every safety-critical pin electrically, and edit the pin block to match.
+See docs/STATUS.md and the FSD pin-mapping section.
+
+Applies with `git apply` or `patch -p1`; both skip this preamble.
+
 diff --git a/firmware/open_evse/Gfi.cpp b/firmware/open_evse/Gfi.cpp
 index 470f2ab..455dee9 100644
 --- a/firmware/open_evse/Gfi.cpp

@@ -1,64 +1,77 @@
 # OpenJuice
 
-**Open-source firmware port for JuiceBox Gen 1 EVSE**
+**OpenEVSE ported to the JuiceBox Gen 1 EV charger, on its existing hardware, with a local web
+interface served by the charger itself.** No cloud, no helper machine, no board or chip swaps.
 
-OpenJuice ports [OpenEVSE](https://github.com/OpenEVSE/open_evse) firmware to run on JuiceBox Gen 1 hardware — no hardware modifications required. Gives bricked JuiceBox units a second life after the Enel X cloud shutdown.
+Enel X Way shut down its North American JuiceBox service in October 2024. The chargers still
+charge, but they lost local visibility and control. OpenJuice restores both.
 
-## What This Does
+> ## 🛑 Do not flash yet
+>
+> `firmware/openevse-juicebox-gen1.patch` encodes the pin map of **PCB V8.9**. eMotorWerks' own
+> source and factory test firmware show the pin map changed at **V8.10** and again at **v8.12**,
+> including the **main relay, current sensing and ground-fault test pins**. Flashing the patch onto a
+> newer board could drive the wrong pins on a 40 A mains circuit. No dump of the stock firmware
+> exists either, so a flash cannot be undone.
+>
+> The port is gated on reading the board revision, dumping the stock firmware, and verifying every
+> safety-critical pin electrically. See [docs/STATUS.md](docs/STATUS.md).
 
-- Replaces the ATmega328P firmware with OpenEVSE (pin-remapped)
-- Provides local RAPI serial control (current, voltage, state, GFI)
-- SAE J1772 compliant pilot signal and state machine
-- GFI protection with self-test and D-latch support
-- Leaves the WiFi module (AMW106) untouched
+## What works today
 
-## Hardware
+| Capability | How | Firmware change |
+|---|---|---|
+| Read module state, faults, uptime, network | The WiFi module's unauthenticated web command interface on port 80 | None |
+| Read energy history: lifetime, 5-minute buckets, charging sessions | Log files on the module's flash, served over plain HTTP; formats decoded | None |
+| Live telemetry: state, current, voltage, power, session energy, temperature | Redirect the charger's cloud lookups to a PC and receive its UDP telemetry | None |
+| Set the charge-current limit, whole amps 6–40 A | Reply to that telemetry as the cloud server would | None |
 
-| Component | Details |
+The last two need a helper running on a PC on the same network, and the charger falls back to the
+vendor cloud whenever its WiFi module reboots. Both limits go away with the port. The procedure is
+in [docs/STATUS.md](docs/STATUS.md); the tools are in [tools/](tools/).
+
+## The plan in one paragraph
+
+**Stage A** puts a read-only dashboard on the charger itself: one HTML file in the WiFi module's
+empty web root, reading the module's own data. **Stage B** ports OpenEVSE to the existing
+ATmega328P and turns that dashboard into a control surface. Stage B begins with zero-risk
+reconnaissance: read the side sticker for the board revision, and triage a spare board as a bench
+rehearsal target. Details, gates and the current state: [docs/STATUS.md](docs/STATUS.md).
+
+## Hardware at a glance
+
+| Part | What we know |
 |---|---|
-| MCU | ATmega328P @ 16MHz, 5V |
-| WiFi | Zentri AMW106 (unchanged) — earlier revisions said AMW006; see [FSD §2.3](docs/OpenJuice-FSD.md) |
-| Programming | USBasp ISP via MOSI/MISO/SCK/RESET |
-| Serial | RAPI on D0/D1 @ 115200 baud |
-
-## Quick Start
-
-```bash
-# Clone OpenEVSE
-git clone https://github.com/OpenEVSE/open_evse.git
-
-# Apply OpenJuice patches (see firmware/)
-# Build
-pio run -e juicebox_gen1
-
-# Flash
-pio run -e juicebox_gen1 -t upload
-
-# Verify
-# Connect serial at 115200, send: $GV
-```
+| Charging controller | ATmega328P, 16 MHz, 5 V. Runs eMotorWerks firmware; OpenEVSE replaces it in Stage B |
+| WiFi module | Zentri **AMW106**, ZentriOS-WZ 3.6.4.0, the final release for this part. The vendor app on it, `JB1_0.zap`, owns the cloud link and cannot be backed up |
+| Board revision | 8.14 or later on the reference unit; unconfirmed until the sticker is read |
+| Pin map | Published for V8.9, V8.10 and v8.12, all different; **unknown for 8.14+** |
+| Programming interface | Unknown for 8.14+; the v8.12 evidence points to an Arduino Pro Mini daughterboard |
 
 ## Documentation
 
-- [Functional Specification (FSD)](docs/OpenJuice-FSD.md)
-- [Datasheets & References](datasheets/SOURCES.md)
+| Document | What it covers |
+|---|---|
+| [STATUS.md](docs/STATUS.md) | Goal, constraints, where things stand, next steps, interim control procedure |
+| [OpenJuice-FSD.md](docs/OpenJuice-FSD.md) | Functional specification for the port: hardware, per-revision pin maps, build, commissioning, risks |
+| [JuiceBox-Gen1-Pentest-RE.md](docs/JuiceBox-Gen1-Pentest-RE.md) | Security assessment and protocol reverse engineering of the live unit |
+| [ZentriOS-Gecko-LAN-Discovery.md](docs/ZentriOS-Gecko-LAN-Discovery.md) | The UDP 55555 discovery beacon shared by ZentriOS and Gecko OS devices |
+| [datasheets/SOURCES.md](datasheets/SOURCES.md) | Datasheets and reference sources |
 
-### Related reverse engineering (Zentri / Gecko OS family)
+The repository also holds a sister project, reverse engineering of the Generac Mobile Link Tether,
+which runs the same WiFi OS family. It is documented in
+[Generac-MobileLink-Tether-RE.md](docs/Generac-MobileLink-Tether-RE.md),
+[MobileLink-App-Lineage.md](docs/MobileLink-App-Lineage.md) and
+[MobileLink-Cloud-API.md](docs/MobileLink-Cloud-API.md).
 
-The JuiceBox's AMW106 WiFi module and its ZentriOS/Gecko OS relatives share a
-common LAN discovery beacon and a local TCP service on port 2000 that OpenJuice's local-control path builds on:
+## Safety
 
-- [JuiceBox Gen 1 — Local Protocol & Security Assessment](docs/JuiceBox-Gen1-Pentest-RE.md) — full RE of the live unit: the ZentriOS command surface (ports 80/2000, the working `/command/*` HTTP API), the decoded **JuiceNet UDP telemetry protocol** (state, voltage, max current, lifetime/session energy), the Enel X / Voltie cloud backends, and the module's on-board web server — the basis for a local HTML interface and control.
-- [ZentriOS/Gecko OS LAN Discovery Beacon & Local Protocols](docs/ZentriOS-Gecko-LAN-Discovery.md) — the UDP 55555 JSON beacon (auto-discovers the JuiceBox IP for v0.2), port 2000, and how to capture it. Verified on live JuiceBox + Generac hardware.
-- [Generac Mobile Link Tether — RE Notes](docs/Generac-MobileLink-Tether-RE.md) — a sister cloud-tethered device on the same OS family (Gecko OS / WGM160P): provisioning protocol, locked-down local surface, and cloud API. A cautionary counterpoint to the recoverable JuiceBox.
-- [Mobile Link App Lineage & Legacy V1 Provisioning](docs/MobileLink-App-Lineage.md) — three app generations (Xamarin → Xamarin → React Native) reverse-engineered to recover the legacy **GainSpan V1** provisioning API for older controllers, mapped against the modern V2 Gecko OS flow.
-- [Mobile Link Cloud REST API](docs/MobileLink-Cloud-API.md) — the full cloud contract (endpoints, telemetry model, B2C auth, enrollment flow) recovered from the Xamarin `MobileLinkClient` by LZ4-decompressing the .NET assembly store. The spec for a local-independent telemetry/control integration.
-- [tools/](tools/) — pure-Python (stdlib-only) beacon/pcap decoders, a Gecko OS provisioning client, and APK framework/endpoint analyzers. `beacon_extract.py` decodes JuiceBox *and* Generac beacons.
-
-## Status
-
-**v0.1 — In Development**
+This project touches a 240 V, 40 A appliance. Unplug it from mains before opening the enclosure;
+it is a plug-in unit, so unplugging is the correct isolation, not the breaker alone. Never flash
+the charging controller without a verified dump of its flash and EEPROM. Never set
+`zap.auto_run 0` on the WiFi module: the vendor app it disables also brings up WiFi and cannot be
+restored.
 
 ## License
 
-GPL v3 (inherits from OpenEVSE)
+GPL v3, inherited from OpenEVSE. The eMotorWerks JuiceBox firmware is also GPL v3.
