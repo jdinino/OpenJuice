@@ -9,6 +9,23 @@
 | `openevse-juicebox-gen1.patch` | Patch against upstream [OpenEVSE](https://github.com/OpenEVSE/open_evse) adding a `JUICEBOX_GEN1` build target: pin remap, GFI D-latch reset, pilot thresholds, PlatformIO environment. Pin block is **V8.9 only**. |
 | `juicebox_gen1_v0.1_V8.9-pinmap.hex` | The v0.1 build of that patch, committed 2026-02-27. 12,450 bytes of code. Kept as a build reference only; it predates every correction since, including the missing GFI self-test. |
 
+## Provenance (researched 2026-09-25)
+
+| Question | Answer | Evidence |
+|---|---|---|
+| Who wrote it | This project, 2026-02-27, in an AI-assisted session: commit `bfe2ef1`, co-authored by Claude Opus 4.6 | git history |
+| Copied from elsewhere? | No. GitHub code search finds `JUICEBOX_GEN1` and `GFI_LATCH_RESET_PIN` nowhere else | code search, 0 hits |
+| Upstream base | **OpenEVSE 8.2.3**, `OpenEVSE/open_evse` master at `8e492981fa` (2025-01-07) or `944537dcc1` (2026-02-03); the five patched files are identical in both | the patch's `index` pre-image hashes match those upstream blobs exactly |
+| Was the base current? | No. Upstream had already changed three of the five files by 2026-02-20, a week before the patch; the local checkout was stale | upstream file history |
+| Pin map source | eMotorWerks' V8.9 firmware; matches the V8.9 branch of eMotorWerks' V8.10.7 source exactly | source comparison |
+| The hex | A build of this patch on 8.2.3: embeds `8.2.3.OJ` and OpenEVSE's RAPI version `5.2.1`; 12,450 bytes of code, matching the commit's build stats | string extraction |
+
+**Upstream has moved on.** OpenEVSE is at 9.0.0, 72 commits and 300 files past the patch's base,
+including safety-relevant fixes: GFI retry-count handling, a watchdog pat during the GFI self-test,
+relay zero-cross switching and a bounded current-zero wait. The patch does not apply cleanly to
+current master, since three of its five files have changed. **Rebase onto current OpenEVSE in
+Phase 4** rather than building on 8.2.3.
+
 ## Known state of the patch
 
 - **Pin map:** V8.9. It matches eMotorWerks' own V8.9 branch exactly, so it is a correct V8.9
