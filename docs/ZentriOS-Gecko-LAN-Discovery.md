@@ -7,11 +7,11 @@
 
 ## 1. Why this is in the OpenJuice repo
 
-The JuiceBox Gen 1 WiFi module (Zentri **AMW106**) and the Generac Mobile Link Tether (Silicon Labs **WGM160P**) run the **same OS family** — ZentriOS/WiConnect and its successor Gecko OS. Both emit an identical **UDP broadcast discovery beacon on port 55555**, and both advertise a **stream-mode TCP service on port 2000**.
+The JuiceBox Gen 1 WiFi module (Zentri **AMW106**) and the Generac Mobile Link Tether (Silicon Labs **WGM160P**) run the **same OS family** — ZentriOS/WiConnect and its successor Gecko OS. Both emit an identical **UDP broadcast discovery beacon on port 55555**, and both advertise a **TCP service on port 2000** (on the JuiceBox, an unauthenticated remote-terminal command shell).
 
 This matters for OpenJuice directly:
 
-- The beacon is a **zero-touch way to find the JuiceBox's IP** on the LAN — no port scan, no router login. This is the missing auto-discovery piece for the [v0.2 WiFi RAPI tunneling](juicebox/OpenJuice-FSD.md#9-v02--wifi-rapi-tunneling-via-AMW106) feature, which connects to the AMW106 on **port 2000** (the same `remote_terminal_port` the beacon advertises).
+- The beacon is a **zero-touch way to find the JuiceBox's IP** on the LAN — no port scan, no router login — which stays useful whatever the eventual control transport (see the [FSD](juicebox/OpenJuice-FSD.md) interface section).
 - The beacon carries **RSSI, uptime clock, firmware version, and the AP it's joined to** — a free local telemetry/health feed for a JuiceBox running stock WiFi firmware, requiring **zero changes to the AMW106**.
 
 Everything here was captured live from a home LAN that happened to host **both** a JuiceBox and a Generac Tether at once, giving a clean side-by-side of the two firmware generations.
@@ -63,7 +63,9 @@ Everything here was captured live from a home LAN that happened to host **both**
 }
 ```
 
-> **FSD correction:** [OpenJuice-FSD §2.3](juicebox/OpenJuice-FSD.md#23-wifi-module-not-modified) lists the AMW106 firmware as *WiConnect 2.2.0.12*. The live unit reports **`ZentriOS-WZ-3.6.4.0`** with the eMotorWerks app layer **`EMWERK-JB_1_1-1.4.0.28`** (built 2021-04-27). ZentriOS-WZ is the "WiZnet"/JuiceBox variant. v0.2 planning should target the ZentriOS 3.6 command set, not WiConnect 2.2.
+> **Note:** the live unit runs **`ZentriOS-WZ-3.6.4.0`** with the eMotorWerks app layer
+> **`EMWERK-JB_1_1-1.4.0.28`** (built 2021-04-27), not the WiConnect firmware an early dev-board
+> sample showed. Target the ZentriOS 3.6 command set.
 
 ### 2.4 Live sample — Generac Mobile Link Tether (WGM160P)
 
@@ -86,21 +88,25 @@ Identical schema, different firmware generation — confirming the beacon is a *
 
 ---
 
-## 3. Port 2000 — the stream / remote-terminal service
+## 3. Port 2000 — the remote terminal
 
-Both beacons advertise `remote_terminal_port: 2000`. In ZentriOS/Gecko OS this is the TCP endpoint that bridges the module's UART (stream mode) or exposes its command shell (remote terminal), depending on configuration.
+Both beacons advertise `remote_terminal_port: 2000`. On the JuiceBox this is the **ZentriOS remote
+terminal**: an unauthenticated TCP command shell, the same command parser as the port-80 web
+interface. It is **not** a UART bridge on this unit — `bus.mode` is `command`, not `stream`.
 
 | Device | Port 2000 state | Implication |
 |---|---|---|
-| **JuiceBox (AMW106)** | Stream mode → UART0 (per FSD §9.4, `bus.mode: stream`) | **This is the v0.2 tunnel.** A client connects to `<juicebox_ip>:2000` and speaks RAPI straight to the ATmega328P. The beacon hands you `<juicebox_ip>` for free. |
-| **Generac (WGM160P)** | **Firewalled/disabled** (TCP *and* UDP both refused; the Gecko OS `/command/*` HTTP API returns `Feature not initialized`) | Generac locked the module down to a pure cloud relay. Advertised-but-closed — the beacon reports the configured port regardless of firewall state. |
+| **JuiceBox (AMW106)** | Remote terminal, empty password | A serious exposure, not a control path. **Do not connect:** a session there disables the module's local command interface, which includes its link to the charging controller. |
+| **Generac (WGM160P)** | **Firewalled** (TCP and UDP refused; the `/command/*` HTTP API returns `Feature not initialized`) | Locked down to a pure cloud relay. The beacon reports the configured port regardless of firewall state. |
 
-**Takeaway for OpenJuice v0.2:** the beacon *validates the port-2000 assumption* in FSD §9.6 and removes the "TCP port unknown" risk (FSD risk **W3**). The auto-discovery flow becomes:
+> ⚠️ **Earlier revisions of this document called port 2000 "the v0.2 tunnel".** That was wrong. The
+> port-2000 RAPI-tunnel design was withdrawn (see the FSD changelog): ZentriOS cannot make a
+> WebSocket the stream-mode connection, forbids reading or writing a stream-mode stream over the
+> command interface, and the port is the command shell, not a bridge. The port-forwarding interface
+> to the reflashed controller is the mailbox transport in the FSD, over the port-80 command API.
 
-```
-listen UDP 55555  →  parse JSON  →  match version contains "EMWERK-JB"
-                  →  connect TCP  {ip}:{remote_terminal_port}  →  speak RAPI
-```
+The beacon's value here is **discovery**: it hands you the JuiceBox's current IP with no port scan,
+which stays useful whatever the eventual control transport.
 
 ---
 
@@ -150,7 +156,7 @@ For completeness, over a full 13-minute window (including a cold boot with a cap
 2. **mDNS** (`224.0.0.251:5353`) — a hostname *claim* only: it probes/announces `gecko_os-<suffix>.local → A <ip>`. **No SRV/TXT/PTR records — it advertises no service.**
 3. The **UDP 55555 beacon** described above.
 
-No unicast DNS, no NTP, no TCP, no TLS. This is the useful baseline: on a stock/locked ZentriOS/Gecko device, the **55555 beacon is the entire local-telemetry surface** unless stream mode (port 2000) is open — which, on the JuiceBox, it is.
+No unicast DNS, no NTP, no TCP, no TLS. This is the useful baseline: on a stock ZentriOS/Gecko device the **55555 beacon is the passive local-telemetry surface**. The JuiceBox additionally exposes an unauthenticated command interface on ports 80 and 2000.
 
 ---
 
@@ -158,8 +164,8 @@ No unicast DNS, no NTP, no TCP, no TLS. This is the useful baseline: on a stock/
 
 | Finding | OpenJuice impact |
 |---|---|
-| UDP 55555 JSON beacon on JuiceBox | Auto-discovery of JuiceBox IP for v0.2 (no scan/login) |
-| `remote_terminal_port: 2000` advertised | Confirms v0.2 tunnel port; retires FSD risk W3 |
+| UDP 55555 JSON beacon on JuiceBox | Auto-discovery of the JuiceBox IP (no scan or login) |
+| `remote_terminal_port: 2000` advertised | The module's unauthenticated remote-terminal command shell |
 | Beacon carries RSSI / uptime / firmware | Free local health feed, zero AMW106 changes |
 | AMW106 runs ZentriOS-WZ 3.6.4.0 (not WiConnect 2.2) | Corrects FSD §2.3; target the right command set |
 | `mac` = station iface, `bssid` = AP | Roaming/AP diagnostics for install troubleshooting |

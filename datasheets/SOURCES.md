@@ -3,7 +3,7 @@
 Reference URLs for all key components and related projects used in the OpenJuice project
 (porting OpenEVSE firmware to JuiceBox Gen 1 EVSE hardware).
 
-Last updated: 2026-07-14
+Last updated: 2026-09-25
 
 ---
 
@@ -17,13 +17,16 @@ Last updated: 2026-07-14
 
 ---
 
-## 2. AMW006 - Zentri / ACKme / Silicon Labs WiFi Module
+## 2. AMW106 - Zentri / ACKme / Silicon Labs WiFi Module
+
+The reference unit's module is the **AMW106** running ZentriOS-WZ (FSD §2.3). The closely related
+AMW006 runs the older WiConnect firmware; the hardware datasheet covers both, so both are listed.
 
 | # | Name | URL | Description | Free |
 |---|------|-----|-------------|------|
-| 2a | AMW006-A1x Datasheet (Hardware) | https://www.silabs.com/documents/public/data-sheets/ADS-AMW006-A1x-101R.pdf | Hardware datasheet for the AMW006 "Numbat" WiFi module (pinout, electrical specs, dimensions) | Yes |
-| 2b | Zentri AMW006 / AMW106 Data Sheet (ZentriOS) | https://www.silabs.com/documents/public/data-sheets/ADS-MWx06-ZentriOS.pdf | Combined datasheet covering AMW006 and AMW106 modules running ZentriOS firmware | Yes |
-| 2c | AMW006 Product Page (Silicon Labs) | https://www.silabs.com/wireless/wi-fi/zentri-legacy-modules/device.amw006 | Silicon Labs product page for the AMW006 legacy Zentri WiFi module | Yes |
+| 2a | Zentri AMW006 / AMW106 Data Sheet (ZentriOS) | https://www.silabs.com/documents/public/data-sheets/ADS-MWx06-ZentriOS.pdf | Combined hardware datasheet covering the AMW006 and **AMW106** "Numbat" modules: pinout, electrical specs, dimensions | Yes |
+| 2b | AMW006-A1x Datasheet | https://www.silabs.com/documents/public/data-sheets/ADS-AMW006-A1x-101R.pdf | The AMW006 variant's hardware datasheet | Yes |
+| 2c | AMW106 Product Page (Silicon Labs) | https://www.silabs.com/wireless/wi-fi/zentri-legacy-modules/device.amw106 | Silicon Labs product page for the AMW106 legacy Zentri WiFi module | Yes |
 
 ---
 
