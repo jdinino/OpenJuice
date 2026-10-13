@@ -22,6 +22,7 @@ reference, not redistributed.
 | Path | What it is | How to reproduce |
 |---|---|---|
 | `juicebox-module-backup-2026-09-20/` | 97 files pulled from the module's flash over HTTP: energy logs, `index.html`, the CA cert, three system binaries | `for f in $(ls output); do curl http://<charger>/$f; done` after listing with `ls` |
+| `juicebox-module-backup-2026-10-02/` | Top-up of the above: the 13 log files created since, the two that were still filling on 09-20, and `index.html` (unchanged). With the earlier folder this is every readable file. Not readable by any known means: `JB1_0.zap`, `sys/kernel.bin`, `sys/services.bin` | same method |
 | `amw006-live-config-2026-09-14.txt`, `-2026-09-19-postreboot.txt` | Full `get all` from the live module | `curl http://<charger>/command/get%20all` |
 | `amw006-devboard-config-2026-02-28.txt` | `get all` from a **dev board**, not this charger; WiConnect era. Kept to show the AMW006/AMW106 difference | — |
 | `evse-juicenet-capture-2026-02-27.pcap` | ~10 min capture, 1,478 packets, the original security assessment | router-side `tcpdump host <charger>` |

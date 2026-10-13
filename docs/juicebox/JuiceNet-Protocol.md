@@ -17,7 +17,7 @@ Working implementations of everything here are in [tools/juicebox/](../../tools/
 
 | Link | Carrier | Notes |
 |---|---|---|
-| Charging controller ↔ WiFi module | UART | The module's vendor app, `JB1_0.zap`, exchanges data with the ATmega |
+| Charging controller ↔ WiFi module | UART, 9600 baud | The module's vendor app, `JB1_0.zap`, exchanges data with the ATmega; see §1.3 |
 | WiFi module → cloud | UDP to port 8042 | **Composed by the module's app, not the ATmega** **[V]**: frames carry WiFi RSSI and HTTP errors only the module can know, and a `zn_` native-API function name |
 | Cloud → WiFi module | UDP replies on the same socket | Commands, relayed to the ATmega |
 | WiFi module → LAN | UDP 55555 broadcast | Discovery beacon; see [ZentriOS-Gecko-LAN-Discovery.md](../ZentriOS-Gecko-LAN-Discovery.md) |
@@ -36,6 +36,20 @@ At boot the module asks `directory-api.emotorwerks.com` over HTTPS for its serve
 The DNS redirect used for local control only works in the second case. The directory response also
 carries an `encrypt` flag, which switched another unit to encrypted telemetry mid-session **[D]**.
 
+**Infrastructure status, checked 2026-10-05 [V].** The vendor domains are alive and actively held,
+not dead or for sale. `emotorwerks.com` is registered through 2027-03-24, locked
+(`clientTransferProhibited` and the rest), and served from Microsoft Azure DNS; `enelx.com` sits on
+Enel's own nameservers behind Fastly. Both `directory-api.emotorwerks.com` (behind an Imperva WAF)
+and `jbv1.emotorwerks.com` answer HTTP 200. The apex `emotorwerks.com` refuses HTTPS, so there is no
+public website, but the API hosts are maintained. Despite the directory endpoint being up, this unit
+still cannot complete the handshake: its `/log` loops `Opening … Open failed` and telemetry carries
+`JCom_TxTcpData open err 5035` against the directory URL, consistent with its 2021-era bundled CAs
+(`godaddy_ca.pem`, `starfield.pem`) no longer validating the current endpoint's certificate **[I]**.
+That ongoing handshake failure is exactly what keeps the DNS fallback, and therefore our redirect,
+working. Watch it: if a cert refresh or firmware change let the handshake succeed, the fallback would
+stop and the redirect with it. The domain is not acquirable, so hosting our own endpoint under that
+name is not an option.
+
 ### 1.2 The socket is connected
 
 The module opens a *connected* UDP socket to its server. It accepts replies **only from the exact
@@ -43,6 +57,56 @@ address and port it sent to** **[V]**. A local server therefore has to be the ad
 resolved, which is what the DNS redirect arranges, or has to spoof that address. When no reply comes
 back, the module periodically reopens the socket from a new ephemeral source port **[V]**, so a
 server must answer to the source port of the latest frame, not a cached one.
+
+### 1.3 The controller-to-module link
+
+Researched 2026-10-02 from the recovered eMotorWerks source, the v8.12 factory tester, this unit's
+module configuration and its logged telemetry. No source for the 8.14+ controller firmware has been
+found, so the dialogue on this unit's link is **not known**.
+
+**What the older design did** **[D]**, `JB_firmware_V8_10_7.ino` and `JB_WiFi_Programmer_V8P.ino`:
+
+- The WiFi module was a Roving Networks WiFly in transparent UDP mode. The ATmega composed each
+  report itself and printed it to the module: `<ID>:V..,L..,E..,A..,T..,t..:` plus a newline.
+- The link was SoftwareSerial at 9600 baud, D2 receive and D4 transmit.
+- The server's reply arrived raw on the same link, `CMD<w><HH><MM>A<amps>C<flag>$`, and the ATmega
+  parsed it. An amps value below 6 stopped charging.
+- With no reply for 90 s, the ATmega pulsed the module's reset pin, D12, and went back to its full
+  current rating. This is the ancestor of today's offline-limit fallback.
+
+Today's frame keeps that shape: the same `ID:` prefix, trailing colon, field letters and `CMD`
+format, with a checksum and more fields added.
+
+**What this unit does:**
+
+- **The module's app composes the frames, not the ATmega** **[V]**. `u` and `i` restart from zero
+  when the module alone reboots: `u` read 6700 and 10700, 67 s and 107 s after two module reboots.
+  Both counters also froze while the app was stuck opening its socket: in a 3,165 s gap on
+  2026-09-26, `u` advanced exactly 900 and `i` by one.
+- So the ATmega supplies the measurements (`V`, `A`, `f`, `p`, `T`, `S`, `E`, `L`, `M`, `m`) to
+  the module's app over the UART, and takes the limit back. Whether it pushes or is polled, and in
+  what format, is unknown.
+- The module's UART is `uart0`, 9600 8N1, no flow control, with the bus in **command mode**, echo
+  and prompt on **[V]**. Echo and prompt are the human-terminal settings, which suggests the app
+  reads the UART through the native API and the command parser is not what the ATmega talks to
+  **[I]**.
+- **The link is probably on the ATmega's hardware serial pins, D0 and D1** **[I]**. The v8.12 tester
+  gives D4 and D5 to the metering chip and calls D2 free, leaving D0/D1 as the only serial pair.
+
+**Consequences for the port:**
+
+1. **Capture the stock dialogue before flashing.** With the enclosure open in Phase 1, a
+   receive-only tap on both UART lines at 9600 baud records exactly what the stock ATmega and the
+   app say to each other. Once the ATmega is reflashed that knowledge is gone for good.
+2. **OpenEVSE's RAPI also lives on D0/D1 at a configurable baud.** If the link is there, RAPI
+   reaches the module with no wiring change. It also means a serial adapter on those pins fights
+   the module, and everything OpenEVSE prints lands in the module's command parser or its app.
+3. **D12 resets the WiFi module on V8.10 and v8.12**, active low on V8.10 and either polarity on
+   v8.12. The current patch drives D12 as the GFI test pin, which is right only for V8.9. On a later
+   board that would reset the module at every self-test. The port must hold D12 inactive.
+4. **The vendor app will lose its data source.** After the port it will see OpenEVSE output
+   instead of the stock dialogue. Its reaction is unknown: stale or empty frames at best. It still
+   has to run, because it brings up WiFi. The capture in item 1 shows what it expects.
 
 ---
 
@@ -118,7 +182,7 @@ CMD41247A26M26C006S011!67I$
 | `<weekday>` | `0` Sunday … `6` Saturday, local time |
 | `<HHMM>` | Local time, 24-hour |
 | `A<online>` | **Online** current limit, two digits on `v07` |
-| `M<offline>` | **Offline** current limit, two digits on `v07`. The charger falls back to it when commands stop, after roughly 6 minutes **[I]** |
+| `M<offline>` | **Offline** current limit, two digits on `v07`. Believed to be the value the charger reverts to when commands stop (~6 min) **[I]** — but **2026-10-12 saw no such fallback [V]:** with the helper blocked ~2 h the module held its 40 A online limit and the car drew 31.7 A, never 26 A. Do not rely on this field protecting the circuit |
 | `C<command>` | Three digits; `006` works. **Not an opcode table** |
 | `S<seq>` | Sequence number, three digits. Echoed in telemetry `s` when accepted |
 
@@ -177,6 +241,7 @@ POST http://<charger>/command/      {"command": "...", "data": "..."}      for c
 |---|---|---|
 | `get <variable>`, `get all` | Read configuration and state | None |
 | `faults_print` | Crash log; Safe Mode after 8 entries | None |
+| `faults_reset` (short `faur`) | Clear the crash log back to 0 of 8; present in `help commands`, returns `Success` **[V]** | Clears the stored fault counter (owner's decision) |
 | `ls`, `ls -v` | File list, with types and handles | None |
 | `stream_list` | Open sockets, including the cloud stream and its source port | None |
 | `set <variable> <value>` | Change a variable, live until the next reboot | Live only |
@@ -188,6 +253,14 @@ POST http://<charger>/command/      {"command": "...", "data": "..."}      for c
 consumes the live telemetry; `file_open` leaks a handle; `factory_reset`, `format_flash` and `ota`
 are destructive; `set zap.auto_run` can permanently stop the vendor app, which may be what brings
 WiFi up.
+
+**When the module hangs** ([issue #1](https://github.com/jdinino/OpenJuice/issues/1)). The module
+can hang at the application layer. It still answers pings and accepts TCP connections on port 80,
+but closes every request after about 2 s with **0 bytes**, stops its beacon, and sends no DNS
+queries or telemetry **[V]**. A hang does **not** add an entry to `faults_print`, and the module
+does not reboot itself **[V]**. `reboot` still takes effect in this state even though the reply is
+empty **[V]**. `tools/juicebox/juicebox_helper.py` treats three empty replies in a row as a hang and
+sends `reboot`.
 
 **Practical limits.** At most 3 HTTP clients. One command parser is shared with the module's serial
 link to the charging controller, so send one request at a time. Port 2000 is the same parser as a raw
@@ -259,5 +332,5 @@ prefix; never hardcode the name.
 | `e`, `X`, `Y` telemetry fields | Undecoded; constant while idle |
 | Events `0x80` / `0x81` | Paired; meaning unknown |
 | Events tick unit | No single rate fits the sessions measured |
-| Offline-limit fallback delay | About 6 minutes, from community reports, not measured here |
+| Offline-limit fallback | Claimed ~6 min from community reports; **not reproduced** — 2026-10-12 the module stayed at 40 A for ~2 h with no fallback to the stored limit |
 | Status `5` | Error, per other implementations; never observed here |

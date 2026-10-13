@@ -52,6 +52,9 @@ Wire format: [../docs/juicebox/JuiceNet-Protocol.md](../docs/juicebox/JuiceNet-P
 
 | Script | What it does | Changes the charger? |
 |---|---|---|
+| `juicebox_helper.py` | **The unattended helper.** Resolver, listener and a watchdog in one process: keeps the limit at a target, reattaches the charger after the module reboots, and reboots a hung module (issue #1). `status`, `target N`, `release`, `attach` | Yes: live-only DHCP switch, `reboot`, limit corrections |
+| `install_helper.ps1` | Installs the helper as a scheduled task that starts at boot and runs while logged off; `-Uninstall` hands the charger back to the cloud and removes it | Only on `-Uninstall` |
+| `test_juicebox_helper.py` | Tests for the helper's decisions, web client, resolver and listener. No charger needed | No |
 | `juicebox_dns.py` | DNS resolver that answers both JuiceNet hostnames (`jbv1.emotorwerks.com`, `juicenet-udp-prod5-usa.enelx.com`) with this PC's address and forwards everything else. Needs UDP 53 | No |
 | `juicebox_collector.py` | Receives and decodes the telemetry on UDP 8042. With `--set-online N --send` it sets the limit once and confirms it | Only with `--send` |
 | `set_limit.py` | Sets the current limit once, confirms the acknowledgement, and exits. The preferred way to change the limit | Only with `--send` |
@@ -59,7 +62,50 @@ Wire format: [../docs/juicebox/JuiceNet-Protocol.md](../docs/juicebox/JuiceNet-P
 | `juicebox_rawcap.py` | Legacy Npcap method: captures telemetry in transit to the real cloud and spoofs the cloud's reply. Needs Npcap and scapy, and the charger's gateway pointed at this PC | Only with `--send` |
 | `avr_pinmap.py` | Hints at ATmega328P pin usage from a firmware image. **Corroboration only**: calibrated against V8.9 and found to miss the relay and GFI pins | No |
 
-Only one program can own UDP 8042. Stop the collector before running `set_limit.py`, then restart it.
+### Unattended: `juicebox_helper.py`
+
+Install once from an elevated PowerShell. It copies the helper to `%LOCALAPPDATA%\OpenJuice\helper`,
+because the task starts before network drives are mounted:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\juicebox\install_helper.ps1
+```
+
+Day to day:
+
+```sh
+python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py status      # what it sees and did
+python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py target 24   # change the kept limit
+python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py release     # hand back to the cloud
+python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py attach      # take it back
+python -m unittest tools/juicebox/test_juicebox_helper.py             # tests, no charger needed
+```
+
+Config, logs and telemetry live in `%LOCALAPPDATA%\OpenJuice`: `helper.json` for settings,
+`helper.log` for what it did, `status.json` for the last snapshot, and `telemetry.log` in the
+collector's format.
+
+**What it will and will not do to the charger.** Every module command goes through one allowlist:
+`get`, `faults_print`, `set wlan.dhcp.enabled 0` (never saved), `network_restart` and `reboot`.
+Before switching DHCP off it checks that the charger's saved static address, gateway and DNS lead
+back to this PC. It pauses local control at 6 module faults of 8, because Safe Mode starts at 8 —
+but while paused the cap is **unenforced** (the module sits at its 40 A ceiling and the car can pull
+its full draw, ~32 A), so clear the log promptly. `faults_reset` is deliberately **not** on the
+allowlist; clearing is the owner's decision, sent by hand: `release` the helper first (frees the
+module's one command parser), then `GET http://<charger>/command/faults_reset`, confirm with
+`faults_print` (empty = 0 of 8), then `attach`. After clearing, a stale precheck block can keep the
+helper paused for up to an hour (`BLOCK_BACKOFF`); nudge `target` to a different value to lift it at
+once. Reboots are rate limited to one per 20 minutes and four per day. Limit corrections are capped
+at 12 per day to spare the EEPROM.
+
+**Before a planned long PC outage**, run `release`, and `attach` on return: the released mode is
+saved and survives reboots. A Windows shutdown, crash or power loss does not hand the charger back
+first. The helper recovers it at the next boot, which after a short reboot is usually a no-op.
+
+### Manual tools
+
+Only one program can own UDP 8042 and one can own UDP 53. Stop the helper's scheduled task before
+using these, and stop the collector before running `set_limit.py`.
 
 ```sh
 python juicebox/juicebox_dns.py --to 192.168.1.74 --upstream 192.168.1.1      # needs UDP 53

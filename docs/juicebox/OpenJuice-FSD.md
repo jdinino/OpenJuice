@@ -88,7 +88,7 @@ programming header is, and on whether the controller is socketed.
 |---|---|
 | Module | Zentri **AMW106** **[D]**. The ZentriOS-WZ 3.6 command reference this unit runs lists AMW004/AMW106/AMW136; AMW006 is the older WiConnect part. The unit reports no part number of its own, so confirm visually |
 | Firmware | ZentriOS-WZ 3.6.4.0, app `EMWERK-JB_1_1-1.4.0.28` **[V]**. The final ZentriOS-WZ release; no Gecko OS build exists for this part |
-| Link to the ATmega | UART. On V8.9 and V8.10 it is SoftwareSerial; the pin pair on 8.14+ is unconfirmed. See §3 |
+| Link to the ATmega | UART, 9600 8N1. SoftwareSerial on D2/D4 on V8.9 and V8.10 **[D]**; probably the hardware pins D0/D1 from v8.12 **[I]**; unconfirmed on 8.14+. The module's app composes the telemetry from data the ATmega supplies **[V]**; the dialogue itself is unknown. See [JuiceNet-Protocol.md §1.3](JuiceNet-Protocol.md) |
 | Role | **Owns the JuiceNet cloud link** through its app `JB1_0.zap` **[V]**, and re-enables DHCP at each boot. Left in place by the port; **never disabled**, since it also brings up WiFi and cannot be backed up |
 
 The module's interfaces, the flash logs and the cloud handshake are documented in
@@ -154,6 +154,14 @@ ATM90E26 energy-metering chip** read over a serial link **[D]**. If the referenc
 v8.12, the port needs an ATM90E26 driver in place of OpenEVSE's analog ammeter and voltmeter. A
 reference driver exists in the v8.12 test firmware, but it carries no license, so a clean-room
 driver from the chip's datasheet is required.
+
+A later data point **[D]**: the teardown of a **JuiceBox 40** in the Zero Day Initiative's Pwn2Own
+hardware write-up shows an **Atmel M90E36A** (a three-phase sibling of the ATM90E26) beside the
+ATmega328P, with a Silicon Labs WGM160P WiFi module rather than our AMW106. That is a newer unit
+than this reference charger, so it only bounds the possibilities: the 8.14+ board most likely uses
+an ATM90E26 as v8.12 does, but an M90E36A is possible. The chip is read the same way, over a serial
+link, so the driver work is similar either way. The write-up carries labelled PCB photos (its
+Figures 12–14), a candidate source for the board-photo research lead.
 
 ---
 
@@ -286,9 +294,11 @@ Follow the phase gates in [STATUS.md](../STATUS.md) §6. The safety-critical rul
 | R5 | **ISP lines carry live functions** on V8.9: D11 the RF receiver, D12 a GFCI relay, D13 a heater | High | ISP only with mains unplugged; if sync fails, suspect D11 first |
 | R8 | **Pin map is V8.9; this board is 8.14+** and every published revision differs (§3) | **Critical** | Establish each safety-critical pin electrically before flashing |
 | R9 | **No stock firmware dump exists**; a flash is irreversible | **Critical** | The Phase 2 dump gate. Chip swaps are out of scope, so this is the only revert path |
-| R10 | **D0/D1 may be the WiFi-module link on 8.14+**, not a free serial port | High | Trace where the module's UART meets the ATmega before attaching an adapter |
+| R10 | **D0/D1 is probably the WiFi-module link on 8.14+**, not a free serial port; RAPI output would reach the module | High | Trace where the module's UART meets the ATmega before attaching an adapter. Capture the stock dialogue with a receive-only tap before flashing |
+| R13 | **D12 resets the WiFi module on V8.10 and v8.12**, but the V8.9 patch pulses it as the GFI test pin | High | Hold D12 inactive on later boards; move the GFI test to the verified pin |
+| R14 | **The vendor WiFi app loses its data source after the port**; its reaction is unknown, and it must keep running to bring up WiFi | High | The pre-flash capture shows what it expects; rehearse on the spare board if it has a module |
 | R11 | **Metering moved to an ATM90E26 from v8.12** | High | If the board follows v8.12, write a driver; do not assume an analog CT |
-| R12 | **WiFi module Safe Mode at 8 faults**; it then attempts an OTA on its own | Medium | Watch the fault count (§ STATUS watch items); do not provoke crashes |
+| R12 | **WiFi module Safe Mode at 8 faults**; it then attempts an OTA on its own. The helper also pauses control at 6, and **while paused the 26 A cap is unenforced** — 2026-10-12 the module held 40 A for ~2 h and the car drew 31.7 A | Medium | Watch the fault count (§ STATUS watch items); keep the PC awake so outages stop adding crashes; clear the log with `faults_reset` before it reaches 6; do not provoke crashes |
 
 ---
 
