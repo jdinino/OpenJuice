@@ -21,7 +21,7 @@ Relevance to OpenJuice: same story as the JuiceBox — a cloud-tethered device w
 | **2.28.0.47091** | Mobile Link for Generators (`com.generac.standbystatus`) | Xamarin (.NET, assembly-store blob) | V1→V2 transition | 48,153,959 B |
 | **3.16.0** | Mobile Link for Generators (`com.generac.standbystatus`) | React Native / Hermes bytecode | V2 Gecko OS | 142,712,707 B |
 
-SHA-256 fingerprints are in [../datasheets/SOURCES.md §8d](../datasheets/SOURCES.md).
+SHA-256 fingerprints are in [../datasheets/SOURCES.md §8d](../../datasheets/SOURCES.md).
 
 ---
 
@@ -94,7 +94,7 @@ The shapes line up almost 1:1 — Generac kept the provisioning model and swappe
 | 2.x | `assemblies/assemblies.blob` (Xamarin **XABA** store, partly LZ4) | strings from blob — partial (compressed sections opaque) |
 | 3.x | `assets/index.android.bundle` (**Hermes** bytecode v96) | string-table extraction + pseudo-JS decompile |
 
-Framework detection: `.bundle` magic `c61fbc03…` = Hermes; `Generac.*.dll` names = Xamarin; neither = native. Tooling in [../tools/](../tools/): `analyze_apk.py` (framework + marker matrix), `extract_native.py` (native/Xamarin string mining), `list_entries.py` (locate assemblies), `find_config.py` (dump a config block), `extract_dll_endpoints.py` (.NET endpoints), `verify_apk.py` (confirm an APK matches a known build).
+Framework detection: `.bundle` magic `c61fbc03…` = Hermes; `Generac.*.dll` names = Xamarin; neither = native. Tooling in [../tools/](../../tools/): `analyze_apk.py` (framework + marker matrix), `extract_native.py` (native/Xamarin string mining), `list_entries.py` (locate assemblies), `find_config.py` (dump a config block), `extract_dll_endpoints.py` (.NET endpoints), `verify_apk.py` (confirm an APK matches a known build).
 
 ---
 
