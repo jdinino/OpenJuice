@@ -383,6 +383,27 @@ class TestSockets(unittest.TestCase):
         with open(os.path.join(tmp, "telemetry.log"), encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2)
 
+    def test_listener_survives_a_malformed_frame(self):
+        port = free_udp_port()
+        tmp = tempfile.mkdtemp()
+        tlog = h.TelemetryLog(os.path.join(tmp, "telemetry.log"))
+        keeper = h.LimitKeeper(self.shared.note)
+        threading.Thread(target=h.listener_loop,
+                         args=(self.shared, lambda: self.cfg, keeper, tlog, self.stop),
+                         kwargs={"port": port}, daemon=True).start()
+        time.sleep(0.3)
+        charger = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        charger.settimeout(2)
+        self.addCleanup(charger.close)
+        bad = ("0817081001070449032218248303:v07,s0681,u28588,V2408,L0028676564,S1,T15,"
+               "M40u,m40,t09,i62,e0000,f5998,X0,Y0!YEP:")     # M value breaks int(); used to kill the thread
+        good = bad.replace("M40u", "M40")
+        charger.sendto(bad.encode(), ("127.0.0.1", port))
+        charger.sendto(good.encode(), ("127.0.0.1", port))
+        cmd = charger.recvfrom(512)[0].decode()               # reply to the good frame
+        self.assertRegex(cmd, r"^CMD\d{5}A26M26C006S682!\w+\$$")  # listener survived and still corrects
+        self.assertEqual(self.shared.frames, 2)               # both frames counted, neither crashed it
+
 
 class TestConfig(unittest.TestCase):
     def test_update_validates_and_reloads(self):

@@ -572,6 +572,7 @@ def listener_loop(shared, config, keeper, tlog, stop, port=8042):
     s = bind_udp(port, stop, name="listener")
     if s is None:
         return
+    quiet_since = None
     try:
         while not stop.is_set():
             try:
@@ -580,22 +581,27 @@ def listener_loop(shared, config, keeper, tlog, stop, port=8042):
                 continue
             except ConnectionResetError:     # Windows: ICMP port-unreachable from an old reply
                 continue
-            raw = data.decode("latin1", "replace")
-            tlog.write(addr[0], raw)
-            r = parse(raw)
-            if not r:
-                continue
-            with shared.lock:
-                shared.frame_t = shared.clock()
-                shared.frame_wall = wall()
-                shared.frame_src = addr
-                shared.fields = dict(r[2])
-                shared.frames += 1
-            cfg = config()
-            cmd = keeper.on_frame(r[2], cfg["target_amps"], cfg["mode"] == "local")
-            if cmd:
-                s.sendto(cmd.encode(), addr)
-                shared.note("sent to %s:%d: %s" % (addr[0], addr[1], cmd))
+            try:
+                raw = data.decode("latin1", "replace")
+                tlog.write(addr[0], raw)
+                r = parse(raw)
+                if not r:
+                    continue
+                with shared.lock:
+                    shared.frame_t = shared.clock()
+                    shared.frame_wall = wall()
+                    shared.frame_src = addr
+                    shared.fields = dict(r[2])
+                    shared.frames += 1
+                cfg = config()
+                cmd = keeper.on_frame(r[2], cfg["target_amps"], cfg["mode"] == "local")
+                if cmd:
+                    s.sendto(cmd.encode(), addr)
+                    shared.note("sent to %s:%d: %s" % (addr[0], addr[1], cmd))
+            except Exception:                # one bad frame must not kill telemetry + correction
+                if quiet_since is None or time.monotonic() - quiet_since > 600:
+                    quiet_since = time.monotonic()
+                    log.exception("listener: dropped a frame from %s it could not process", addr[0])
     finally:
         s.close()
         tlog.close()
