@@ -505,6 +505,27 @@ class TestStatusScreen(unittest.TestCase):
         self.assertIn("no telemetry", h._dashboard(st, 99, 8))
         self.assertIn("STOPPED", h._dashboard(st, 99, 8))
 
+    def test_history_feeds_the_charts(self):
+        import datetime
+        tmp = tempfile.mkdtemp()
+        now = datetime.datetime.now().replace(second=5, microsecond=0)
+        yesterday = now - datetime.timedelta(days=1)
+        frame = "%s\t192.168.1.63\t0817:v07,s0001,V2400,L%010d,S2,M26,m40,A%04d!XYZ:\n"
+        with open(os.path.join(tmp, "telemetry.log"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(frame % (yesterday.isoformat(), 1000000, 100))
+            f.write(frame % (yesterday.replace(second=30).isoformat(), 1004000, 257))
+            f.write(frame % (now.isoformat(), 1010000, 317))
+        hist = h.load_history(tmp)
+        self.assertEqual(hist["amps"][now.strftime("%Y-%m-%dT%H:%M")], 31.7)
+        self.assertEqual(hist["amps"][yesterday.strftime("%Y-%m-%dT%H:%M")], 25.7)   # peak of the minute
+        self.assertEqual(len(hist["days"]), 7)
+        self.assertAlmostEqual(hist["days"][-2][1], 10.0)          # yesterday's first frame to today's first
+        self.assertAlmostEqual(hist["days"][-1][1], 0.0)           # today: nothing after its first frame
+        text = h._dashboard(self.snapshot(), 2, 8, hist=hist)
+        self.assertIn("Energy per day", text)
+        self.assertIn("#", text.split("Current per minute")[1])        # a column was drawn
+        self.assertIsNone(h.load_history(os.path.join(tmp, "missing")))
+
 
 if __name__ == "__main__":
     unittest.main()

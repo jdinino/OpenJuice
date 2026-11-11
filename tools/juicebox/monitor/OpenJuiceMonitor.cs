@@ -182,19 +182,18 @@ namespace OpenJuice
             return s ?? "?";
         }
 
-        static void Kv(Canvas cv, int wx, int wy, int line, string label, string value, int iw)
+        static void Text(Canvas cv, int wx, int wy, int line, string label, string value, int iw)
         {
-            cv.Put(wx + 2, wy + 1 + line, label.PadRight(9));
-            cv.Put(wx + 12, wy + 1 + line, Clip(value, iw - 10));
+            cv.Put(wx + 2, wy + 1 + line, label.PadRight(8));
+            cv.Put(wx + 11, wy + 1 + line, Clip(value, iw - 9));
         }
 
-        static int Chip(Canvas cv, int wx, int wy, int line, string label, string text, int[] col, string tail, int iw)
+        static void Chip(Canvas cv, int wx, int wy, int line, string label, string text, int[] col, string tail, int iw)
         {
-            cv.Put(wx + 2, wy + 1 + line, label.PadRight(9));
+            cv.Put(wx + 2, wy + 1 + line, label.PadRight(8));
             string body = " " + text + " ";
-            cv.Put(wx + 12, wy + 1 + line, body, col[0], col[1]);
-            cv.Put(wx + 12 + body.Length, wy + 1 + line, Clip(tail, iw - 10 - body.Length));
-            return wx + 12 + body.Length;
+            cv.Put(wx + 11, wy + 1 + line, body, col[0], col[1]);
+            cv.Put(wx + 11 + body.Length, wy + 1 + line, Clip(tail, iw - 9 - body.Length));
         }
 
         static void Meter(Canvas cv, Theme T, int x0, int y0, int width, double value, double maxv, double cap, bool bad)
@@ -209,24 +208,40 @@ namespace OpenJuice
             }
         }
 
-        public static Canvas Compose(Dictionary<string, object> st, double age, Theme T, int W, int H, string hint)
+        static void Bar(Canvas cv, Theme T, int wx, int wy, int line, string label, double value, double maxv,
+                        string shown, double cap, bool bad, int bw)
         {
-            W = Math.Max(80, W); H = Math.Max(25, H);
+            cv.Put(wx + 2, wy + 1 + line, label.PadRight(8));
+            Meter(cv, T, wx + 11, wy + 1 + line, bw, value, maxv, cap, bad);
+            cv.Put(wx + 12 + bw, wy + 1 + line, Clip(shown, 7));
+        }
+
+        // A vertical bar growing up from `bottom`; returns the row of its top cell.
+        static int Column(Canvas cv, int x0, int bottom, int rows, double frac, int width, int fg)
+        {
+            int eighths = (int)Math.Round(Math.Max(0.0, Math.Min(frac, 1.0)) * rows * 8);
+            if (frac > 0 && eighths == 0) eighths = 1;
+            int full = eighths / 8, part = eighths % 8;
+            for (int i = 0; i < full; i++) cv.Put(x0, bottom - i, new string(Canvas.FULL, width), fg, -1);
+            if (part > 0) cv.Put(x0, bottom - full, new string((char)(0x2580 + part), width), fg, -1);
+            return bottom - full - (part > 0 ? 0 : -1);
+        }
+
+        public static Canvas Compose(Dictionary<string, object> st, double age, Theme T, int W, int H, string hint, History hist)
+        {
+            W = Math.Max(80, W); H = Math.Max(30, H);
             DateTime now = DateTime.Now;
             bool alive = age < 30;
             Canvas cv = new Canvas(W, H, T.Pattern ? Canvas.DESK : ' ', T.Desk[0], T.Desk[1]);
 
             cv.Fill(0, 0, W, 1, ' ', T.Bar[0], T.Bar[1]);
             cv.Put(1, 0, "OpenJuice", T.Key, -1);
-            cv.Put(11, 0, Canvas.SEP + " JuiceBox Gen 1 " + Canvas.SEP + " local control");
+            cv.Put(11, 0, Canvas.SEP + " JuiceBox Gen 1");
             string clock = now.ToString("yyyy-MM-dd HH:mm:ss");
             cv.Put(W - clock.Length - 1, 0, clock);
 
             cv.Fill(0, H - 1, W, 1, ' ', T.Bar[0], T.Bar[1]);
             List<string[]> items = new List<string[]>();
-            items.Add(new string[] { "Mode", J.S(st, "mode", "?") });
-            items.Add(new string[] { "Target", J.I(st, "target_amps", 0) + " A" });
-            items.Add(new string[] { "Age", (int)age + "s" });
             items.Add(new string[] { "Theme", T.Name });
             if (!string.IsNullOrEmpty(hint)) items.Add(new string[] { "Keys", hint });
             int x = 1;
@@ -241,86 +256,105 @@ namespace OpenJuice
 
             int ww = (W - 6) / 2;
             int lx = 2, rx = 2 + ww + 2, ty = 2, th = 9;
-            int fw = 2 * ww + 2, ny = 12, nh = 6, by = 19, bh = H - 21;
-            int iw = ww - 4;
+            int fw = 2 * ww + 2, cy = 12, chh = 10, by = 23, bh = H - 25;
+            int iw = ww - 4, bw = iw - 17;
 
-            // --- Charger
+            // --- Charger: every reading as a bar
             cv.Window(lx, ty, ww, th, "Charger", T.Main, T.Shadow);
             object t = J.Get(st, "telemetry");
             object f = J.Get(t, "fields");
+            int cap = J.I(f, "M", 0), circ = J.I(f, "m", 40);
+            if (circ == 0) circ = 40;
             if (J.Has(t, "last"))
             {
                 string sc = J.S(f, "S", null);
                 int[] scol = sc == "2" ? T.Ok : sc == "1" ? T.Info : sc == "5" ? T.Bad : T.Idle;
-                string ageS = J.Has(t, "age_s") ? J.I(t, "age_s", 0) + "s ago" : "?";
-                Chip(cv, lx, ty, 0, "State", StateName(sc).ToUpperInvariant(), scol, " " + ageS, iw);
-                double a = J.I(f, "A", 0) / 10.0;
-                int cap = J.I(f, "M", 0), circ = J.I(f, "m", 40);
-                if (circ == 0) circ = 40;
-                Kv(cv, lx, ty, 1, "Current", a.ToString("0.0", Inv) + " A  cap " + cap + "  max " + circ, iw);
-                Meter(cv, T, lx + 2, ty + 3, iw, a, circ, cap, a > cap + 0.05);
-                Kv(cv, lx, ty, 3, "Volts", (J.I(f, "V", 0) / 10.0).ToString("0.0", Inv) + " V     Temp " + J.S(f, "T", "?") + " C", iw);
-                Kv(cv, lx, ty, 4, "Session", J.Has(f, "E") ? (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
-                Kv(cv, lx, ty, 5, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
-                Kv(cv, lx, ty, 6, "Frames", J.I(t, "frames", 0) + " received", iw);
+                Chip(cv, lx, ty, 0, "State", StateName(sc).ToUpperInvariant(), scol, J.Has(t, "age_s") ? " " + J.I(t, "age_s", 0) + "s ago" : "", iw);
+                double a = J.I(f, "A", 0) / 10.0, v = J.I(f, "V", 0) / 10.0;
+                int temp = J.I(f, "T", 0);
+                Bar(cv, T, lx, ty, 1, "Current", a, circ, a.ToString("0.0", Inv) + " A", cap, a > cap + 0.05, bw);
+                Bar(cv, T, lx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, (a * v / 1000.0).ToString("0.00", Inv) + " kW", -1, false, bw);
+                Bar(cv, T, lx, ty, 3, "Volts", v - 200, 60, v.ToString("0.0", Inv) + " V", -1, !(v >= 210 && v <= 255), bw);
+                Bar(cv, T, lx, ty, 4, "Temp", temp, 80, temp + " C", -1, temp > 60, bw);
+                Text(cv, lx, ty, 5, "Session", J.Has(f, "E") ? (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
+                Text(cv, lx, ty, 6, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
             }
             else cv.Put(lx + 2, ty + 1, Clip("no telemetry since the helper started", iw));
 
-            // --- Watchdog
-            cv.Window(rx, ty, ww, th, "Watchdog", T.Win, T.Shadow);
+            // --- Health: helper, link and the counters that have limits
+            cv.Window(rx, ty, ww, th, "Health", T.Win, T.Shadow);
             object w = J.Get(st, "watchdog");
             string up = "?";
             DateTime started;
             if (DateTime.TryParse(J.S(st, "started", ""), Inv, DateTimeStyles.None, out started)) up = Dur((now - started).TotalSeconds);
-            Chip(cv, rx, ty, 0, "Helper", alive ? "RUNNING" : "STOPPED", alive ? T.Ok : T.Bad, "  pid " + J.S(st, "pid", "?"), iw);
-            Kv(cv, rx, ty, 1, "Uptime", up, iw);
+            Chip(cv, rx, ty, 0, "Helper", alive ? "RUNNING" : "STOPPED", alive ? T.Ok : T.Bad, " up " + up, iw);
             string ws = J.S(w, "state", "?");
             int[] wcol = ws == "attached" ? T.Ok
                 : (ws == "reattaching" || ws == "silent" || ws == "rebooting" || ws == "starting" || ws == "released") ? T.Warn : T.Bad;
             string since = Hms(J.S(w, "since", null));
-            Chip(cv, rx, ty, 2, "State", ws, wcol, " since " + (since.Length >= 5 ? since.Substring(0, 5) : since), iw);
-            cv.Put(rx + 2, ty + 4, Clip(J.S(w, "detail", ""), iw));
-            if (!J.Has(w, "module_faults")) Kv(cv, rx, ty, 4, "Faults", "unknown", iw);
+            Chip(cv, rx, ty, 1, "Link", ws, wcol, " since " + (since.Length >= 5 ? since.Substring(0, 5) : since), iw);
+            if (!J.Has(w, "module_faults")) Text(cv, rx, ty, 2, "Faults", "unknown", iw);
             else
             {
                 int nf = J.I(w, "module_faults", 0);
-                int end = Chip(cv, rx, ty, 4, "Faults", nf + "/8", nf <= 2 ? T.Ok : nf <= 5 ? T.Warn : T.Bad, "", iw);
-                Meter(cv, T, end + 1, ty + 5, Math.Min(16, iw - (end + 1 - rx - 2)), nf, 8, -1, nf > 5);
+                Bar(cv, T, rx, ty, 2, "Faults", nf, 8, nf + "/8", 6, nf > 5, bw);
             }
             object lim = J.Get(st, "limit");
-            Kv(cv, rx, ty, 5, "Reboots", J.I(w, "reboots_24h", 0) + " in 24 h", iw);
-            Kv(cv, rx, ty, 6, "Limit", J.I(lim, "corrections_24h", 0) + " corrections in 24 h", iw);
-
-            // --- Network (two columns)
-            cv.Window(lx, ny, fw, nh, "Network", T.Win, T.Shadow);
+            int nr = J.I(w, "reboots_24h", 0), nc = J.I(lim, "corrections_24h", 0);
+            Bar(cv, T, rx, ty, 3, "Reboots", nr, 4, nr + "/4", -1, nr >= 4, bw);
+            Bar(cv, T, rx, ty, 4, "Fixes", nc, 12, nc + "/12", -1, nc >= 12, bw);
+            object rv = J.Get(J.Get(st, "beacon"), "rssi");
+            if (rv is int) Bar(cv, T, rx, ty, 5, "Signal", (int)rv + 90, 50, (int)rv + " dBm", -1, (int)rv < -75, bw);
+            else Text(cv, rx, ty, 5, "Signal", "no beacon", iw);
             object r = J.Get(st, "resolver");
-            object bcn = J.Get(st, "beacon");
-            object rv = J.Get(bcn, "rssi");
-            bool hasRssi = rv is int;
-            int rssi = hasRssi ? (int)rv : 0;
-            int half = fw / 2;
-            string[][][] cols = new string[][][] {
-                new string[][] {
-                    new string[] { "Resolver", J.I(r, "hijacks", 0) + " answers" },
-                    new string[] { "Last ask", Hms(J.S(r, "last_hijack", null)) },
-                    new string[] { "Source", J.S(t, "from", "-") },
-                    new string[] { "Last fix", J.S(lim, "outcome", "none") } },
-                new string[][] {
-                    new string[] { "Beacon", J.S(bcn, "ip", "-") },
-                    new string[] { "MAC", J.S(bcn, "mac", "-") },
-                    new string[] { "RSSI", rv != null ? Convert.ToString(rv, Inv) + " dBm" : "-" },
-                    new string[] { "Seen", J.Has(bcn, "t") ? Hms(J.S(bcn, "t", null)) : "-" } } };
-            for (int c = 0; c < 2; c++)
+            string lastAsk = Hms(J.S(r, "last_hijack", null));
+            Text(cv, rx, ty, 6, "Resolver", J.I(r, "hijacks", 0) + " answers, last " + (lastAsk.Length >= 5 ? lastAsk.Substring(0, 5) : lastAsk), iw);
+
+            // --- Chart: current per minute
+            int nb = iw - 3, bottom = cy + 7;
+            cv.Window(lx, cy, ww, chh, "Current per minute, A", T.Win, T.Shadow);
+            if (hist != null)
             {
-                int x0 = lx + 2 + c * half;
-                for (int i = 0; i < cols[c].Length; i++)
+                cv.Put(lx + 2, cy + 1, circ.ToString().PadLeft(2));
+                cv.Put(lx + 2, bottom, " 0");
+                if (cap > 0 && cap < circ) cv.Put(lx + 2, bottom - (int)((double)cap / circ * 7), cap.ToString().PadLeft(2));
+                for (int i = 0; i < nb; i++)
                 {
-                    cv.Put(x0, ny + 1 + i, cols[c][i][0].PadRight(9));
-                    cv.Put(x0 + 10, ny + 1 + i, Clip(cols[c][i][1], half - 14));
-                    if (cols[c][i][0] == "RSSI" && hasRssi)
-                        Meter(cv, T, x0 + 19, ny + 1 + i, Math.Min(14, half - 23), rssi + 90, 50, -1, rssi < -75);
+                    string key = now.AddMinutes(-(nb - 1 - i)).ToString("yyyy-MM-dd'T'HH:mm", Inv);
+                    double a;
+                    if (hist.Amps.TryGetValue(key, out a))
+                    {
+                        if (a > 0) Column(cv, lx + 5 + i, bottom, 7, a / circ, 1, a > cap + 0.05 ? T.FillBad : T.Fill);
+                        else cv.Put(lx + 5 + i, bottom, "_");
+                    }
+                }
+                cv.Put(lx + 5, cy + 8, "-" + nb + "m");
+                cv.Put(lx + 5 + nb - 3, cy + 8, "now");
+            }
+            else cv.Put(lx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
+
+            // --- Chart: energy per day
+            cv.Window(rx, cy, ww, chh, "Energy per day, kWh", T.Win, T.Shadow);
+            if (hist != null && hist.DayKwh.Length > 0)
+            {
+                double top = 0;
+                foreach (double k in hist.DayKwh) if (!double.IsNaN(k) && k > top) top = k;
+                if (top <= 0) top = 1;
+                int n0 = hist.DayKwh.Length;
+                int x0 = rx + 2 + Math.Max(0, (iw - 4 * n0 + 1) / 2);
+                for (int i = 0; i < n0; i++)
+                {
+                    int xx = x0 + 4 * i;
+                    double kwh = hist.DayKwh[i];
+                    cv.Put(xx, cy + 8, hist.DayLabels[i].PadRight(3));
+                    if (double.IsNaN(kwh)) { cv.Put(xx, bottom, " - "); continue; }
+                    int row = kwh > 0 ? Column(cv, xx, bottom, 5, kwh / top, 3, T.Fill) : bottom + 1;
+                    string lab = kwh >= 10 ? kwh.ToString("0", Inv) : kwh.ToString("0.0", Inv);
+                    lab = lab.PadLeft((3 + lab.Length) / 2).PadRight(3);
+                    cv.Put(xx, row - 1, lab);
                 }
             }
+            else cv.Put(rx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
 
             // --- Event log
             cv.Window(lx, by, fw, bh, "Event log", T.Log, T.Shadow);
@@ -329,10 +363,113 @@ namespace OpenJuice
             for (int i = 0; i < n; i++)
             {
                 object e = evs[evs.Count - n + i];
-                cv.Put(lx + 2, by + 1 + i, Hms(J.S(e, "t", null)), T.LogTime, -1);
-                cv.Put(lx + 11, by + 1 + i, Clip(J.S(e, "msg", ""), fw - 13), T.LogText, -1);
+                string stamp = J.S(e, "t", "").Replace('T', ' ');
+                cv.Put(lx + 2, by + 1 + i, stamp.Length > 19 ? stamp.Substring(0, 19) : stamp, T.LogTime, -1);
+                cv.Put(lx + 22, by + 1 + i, Clip(J.S(e, "msg", ""), fw - 24), T.LogText, -1);
             }
             return cv;
+        }
+    }
+
+    // Chart data from telemetry.log: peak amps per minute (recent) and kWh per day.
+    // Mirrors load_history() in juicebox_helper.py.
+    class History
+    {
+        public readonly Dictionary<string, double> Amps = new Dictionary<string, double>();
+        public string[] DayLabels = new string[0];
+        public double[] DayKwh = new double[0];                       // NaN = no data for that day
+        static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
+
+        static int Field(string line, string key)
+        {
+            int tab = line.LastIndexOf('\t');
+            foreach (string tok in line.Substring(tab + 1).Split(','))
+            {
+                if (!tok.StartsWith(key, StringComparison.Ordinal)) continue;
+                string digits = tok.Substring(key.Length).Split('!')[0];
+                int v;
+                if (digits.Length > 0 && int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out v)) return v;
+            }
+            return -1;
+        }
+
+        static string ReadLine(FileStream f)
+        {
+            StringBuilder sb = new StringBuilder();
+            int b;
+            while ((b = f.ReadByte()) >= 0 && b != '\n' && sb.Length < 8192) sb.Append((char)b);
+            return (b < 0 && sb.Length == 0) ? null : sb.ToString();
+        }
+
+        static int LifetimeAt(FileStream f, long size, string stamp)
+        {
+            long lo = 0, hi = size;
+            while (hi - lo > 8192)
+            {
+                long mid = (lo + hi) / 2;
+                f.Position = mid;
+                ReadLine(f);
+                string line = ReadLine(f) ?? "";
+                if (line.Length >= 19 && string.CompareOrdinal(line, 0, stamp, 0, 19) < 0) lo = mid; else hi = mid;
+            }
+            f.Position = lo;
+            if (lo > 0) ReadLine(f);
+            for (int i = 0; i < 2000; i++)
+            {
+                string line = ReadLine(f);
+                if (line == null) return -1;
+                if (line.Length >= 19 && string.CompareOrdinal(line, 0, stamp, 0, 19) >= 0)
+                {
+                    int v = Field(line, "L");
+                    if (v >= 0) return v;
+                }
+            }
+            return -1;
+        }
+
+        public static History Load(string dir)
+        {
+            try
+            {
+                using (FileStream f = new FileStream(Path.Combine(dir, "telemetry.log"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    History h = new History();
+                    long size = f.Length;
+                    f.Position = Math.Max(0, size - 200 * 1024);
+                    byte[] buf = new byte[(int)(size - f.Position)];
+                    int got = 0, n;
+                    while (got < buf.Length && (n = f.Read(buf, got, buf.Length - got)) > 0) got += n;
+                    string[] lines = Latin1.GetString(buf, 0, got).Split('\n');
+                    int lastL = -1;
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        string s = lines[i];
+                        if (s.Length < 16 || s.IndexOf(":v", StringComparison.Ordinal) < 0) continue;
+                        double a = Math.Max(0, Field(s, "A")) / 10.0;
+                        string key = s.Substring(0, 16);
+                        double prev;
+                        h.Amps[key] = h.Amps.TryGetValue(key, out prev) ? Math.Max(prev, a) : a;
+                        int v = Field(s, "L");
+                        if (v >= 0) lastL = v;
+                    }
+                    const int days = 7;
+                    DateTime today = DateTime.Today;
+                    int[] marks = new int[days + 1];
+                    for (int i = 0; i < days; i++)
+                        marks[i] = LifetimeAt(f, size, today.AddDays(-(days - 1 - i)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "T00:00:00");
+                    marks[days] = lastL;
+                    h.DayLabels = new string[days];
+                    h.DayKwh = new double[days];
+                    for (int i = 0; i < days; i++)
+                    {
+                        int a = marks[i], b = marks[i + 1] >= 0 ? marks[i + 1] : lastL;
+                        h.DayLabels[i] = today.AddDays(-(days - 1 - i)).ToString("ddd", CultureInfo.InvariantCulture).Substring(0, 2);
+                        h.DayKwh[i] = (a >= 0 && b >= a) ? (b - a) / 1000.0 : double.NaN;
+                    }
+                    return h;
+                }
+            }
+            catch (Exception) { return null; }
         }
     }
 
@@ -398,7 +535,7 @@ namespace OpenJuice
             Program.Measure(font, out cw, out ch);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             ClientSize = new Size(80 * cw, 31 * ch);
-            MinimumSize = SizeFromClientSize(new Size(80 * cw, 25 * ch));
+            MinimumSize = SizeFromClientSize(new Size(80 * cw, 30 * ch));
             StartPosition = FormStartPosition.CenterScreen;
             Icon = SystemIcons.Application;
             KeyPreview = true;
@@ -461,10 +598,10 @@ namespace OpenJuice
 
             double age;
             Dictionary<string, object> st = Program.ReadStatus(dataDir, out age);
-            int cols = Math.Max(80, ClientSize.Width / cw), rows = Math.Max(25, ClientSize.Height / ch);
+            int cols = Math.Max(80, ClientSize.Width / cw), rows = Math.Max(30, ClientSize.Height / ch);
             if (st != null)
             {
-                canvas = Screen.Compose(st, age, Theme.All[theme], cols, rows, "T theme");
+                canvas = Screen.Compose(st, age, Theme.All[theme], cols, rows, "T theme", History.Load(dataDir));
                 object t = J.Get(st, "telemetry"), f = J.Get(t, "fields");
                 DateTime last;
                 string s = J.S(f, "S", null);
@@ -550,7 +687,7 @@ namespace OpenJuice
                     while (x < cv.W && cv.C[y, x].Fg == fg && cv.C[y, x].Bg == bg)
                     {
                         char c = cv.C[y, x].Ch;
-                        if (c == Canvas.FULL) c = ' ';              // solid blocks are painted as rectangles below
+                        if (c >= '▁' && c <= Canvas.FULL) c = ' ';   // block characters are painted as rectangles below
                         else if (c != ' ') ink = true;
                         sb.Append(c);
                         x++;
@@ -558,7 +695,12 @@ namespace OpenJuice
                     g.FillRectangle(Brush(brushes, bg), start * cw, y * ch, (x - start) * cw, ch);
                     if (ink) TextRenderer.DrawText(g, sb.ToString(), font, new Point(start * cw, y * ch), Pal(fg), Pal(bg), Flags);
                     for (int i = start; i < x; i++)
-                        if (cv.C[y, i].Ch == Canvas.FULL) g.FillRectangle(Brush(brushes, fg), i * cw, y * ch + 2, cw - 1, ch - 4);
+                    {
+                        char b = cv.C[y, i].Ch;
+                        if (b < '▁' || b > Canvas.FULL) continue;
+                        int hgt = ch * (b - '▀') / 8;        // eighths of a cell, from the bottom
+                        g.FillRectangle(Brush(brushes, fg), i * cw, y * ch + ch - hgt, cw - 1, hgt);
+                    }
                 }
             }
         }
@@ -612,7 +754,7 @@ namespace OpenJuice
                 Dictionary<string, object> st = ReadStatus(dir, out age);
                 if (st == null) return 1;
                 Theme T = Theme.All[Theme.IndexOf(args.Length >= 3 ? args[2] : LoadTheme(dir))];
-                Canvas cv = Screen.Compose(st, age, T, 80, 31, "T theme");
+                Canvas cv = Screen.Compose(st, age, T, 80, 31, "T theme", History.Load(dir));
                 using (Font font = MakeFont())
                 {
                     int cw, ch;

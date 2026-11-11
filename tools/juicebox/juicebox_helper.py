@@ -939,9 +939,10 @@ def _hhmmss(iso):
 
 # ---- status TUI: a cell canvas themed after Turbo Vision / TuiCss ----
 _UNI = {"h": "═", "v": "║", "tl": "╔", "tr": "╗", "bl": "╚", "br": "╝",
-        "full": "█", "empty": "░", "desk": "░", "sep": "│"}
+        "full": "█", "empty": "░", "desk": "░", "sep": "│",
+        "part": "▁▂▃▄▅▆▇"}
 _ASC = {"h": "=", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+",
-        "full": "#", "empty": ".", "desk": " ", "sep": "|"}
+        "full": "#", "empty": ".", "desk": " ", "sep": "|", "part": ""}
 
 # Colours are ANSI SGR numbers: (fg, bg) pairs, or a lone fg. tools/juicebox/monitor/
 # OpenJuiceMonitor.cs carries the same table; change both together.
@@ -1082,23 +1083,89 @@ def _clip(s, n):
     return s if len(s) <= n else s[:max(0, n - 3)] + "..."
 
 
-def _compose(st, age, events, g, size=(80, 25), hint="", theme="turbo"):
+def _field(line, key):
+    """Integer value of one telemetry field (e.g. 'A', 'L') in a telemetry.log line, or None."""
+    for tok in line.rsplit("\t", 1)[-1].split(","):
+        if tok.startswith(key):
+            digits = tok[len(key):].split("!")[0]
+            if digits.isdigit():
+                return int(digits)
+    return None
+
+
+def _log_lifetime_at(f, size, stamp):
+    """Lifetime Wh in the first frame at or after an ISO timestamp, by bisecting the log."""
+    lo, hi = 0, size
+    while hi - lo > 8192:
+        mid = (lo + hi) // 2
+        f.seek(mid)
+        f.readline()
+        ts = f.readline()[:19].decode("latin1")
+        if len(ts) == 19 and ts < stamp:
+            lo = mid
+        else:
+            hi = mid
+    f.seek(lo)
+    if lo:
+        f.readline()
+    for _ in range(2000):
+        line = f.readline()
+        if not line:
+            return None
+        s = line.decode("latin1")
+        if s[:19] >= stamp:
+            v = _field(s, "L")
+            if v is not None:
+                return v
+    return None
+
+
+def load_history(data_dir, days=7):
+    """Chart data from telemetry.log: peak amps per minute (recent) and kWh per day.
+
+    Returns {"amps": {"YYYY-MM-DDTHH:MM": amps}, "days": [(label, kWh or None), ...]} or None.
+    """
+    try:
+        with open(os.path.join(data_dir, "telemetry.log"), "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - 200 * 1024))
+            amps, last_l = {}, None
+            for s in f.read().decode("latin1").split("\n")[1:]:
+                if ":v" not in s:
+                    continue
+                a = (_field(s, "A") or 0) / 10.0
+                amps[s[:16]] = max(a, amps.get(s[:16], 0.0))
+                v = _field(s, "L")
+                if v is not None:
+                    last_l = v
+            today = datetime.date.today()
+            dates = [today - datetime.timedelta(days=days - 1 - i) for i in range(days)]
+            marks = [_log_lifetime_at(f, size, d.isoformat() + "T00:00:00") for d in dates] + [last_l]
+            daily = []
+            for i, d in enumerate(dates):
+                a, b = marks[i], marks[i + 1] if marks[i + 1] is not None else last_l
+                daily.append((d.strftime("%a")[:2], (b - a) / 1000.0 if a is not None and b is not None and b >= a else None))
+            return {"amps": amps, "days": daily}
+    except OSError:
+        return None
+
+
+def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=None):
     """Lay the status snapshot out as windows on a desktop. Returns a _Canvas."""
     T = THEMES.get(theme, THEMES["turbo"])
-    W, H = max(80, size[0]), max(25, size[1])
+    W, H = max(80, size[0]), max(30, size[1])
     now = datetime.datetime.now()
     alive = age < 30
     cv = _Canvas(W, H, g["desk"] if T["pattern"] else " ", *T["desk"])
 
     cv.fill(0, 0, W, 1, " ", *T["bar"])                     # title bar
     cv.put(1, 0, "OpenJuice", T["key"])
-    cv.put(11, 0, "%s JuiceBox Gen 1 %s local control" % (g["sep"], g["sep"]))
+    cv.put(11, 0, "%s JuiceBox Gen 1" % g["sep"])
     clock = now.strftime("%Y-%m-%d %H:%M:%S")
     cv.put(W - len(clock) - 1, 0, clock)
 
     cv.fill(0, H - 1, W, 1, " ", *T["bar"])                 # status bar
-    items = [("Mode", str(st["mode"])), ("Target", "%d A" % st["target_amps"]),
-             ("Age", "%ds" % int(age)), ("Theme", theme)]
+    items = [("Theme", theme)]
     if hint:
         items.append(("Keys", hint))
     x = 1
@@ -1111,19 +1178,19 @@ def _compose(st, age, events, g, size=(80, 25), hint="", theme="turbo"):
 
     ww = (W - 6) // 2
     lx, rx, ty, th = 2, 2 + ww + 2, 2, 9
-    fw, ny, nh, by, bh = 2 * ww + 2, 12, 6, 19, H - 21     # full-width Network strip and Event log
+    fw, cy, chh, by, bh = 2 * ww + 2, 12, 10, 23, H - 25    # charts row, then the Event log
     iw = ww - 4                                             # text columns inside a window
+    bw = iw - 17                                            # bar cells in a "label bar value" row
 
-    def kv(wx, wy, line, label, value, fg=None):
-        cv.put(wx + 2, wy + 1 + line, "%-9s" % label)
-        cv.put(wx + 12, wy + 1 + line, _clip(value, iw - 10), fg)
+    def text(wx, wy, line, label, value):
+        cv.put(wx + 2, wy + 1 + line, "%-8s" % label)
+        cv.put(wx + 11, wy + 1 + line, _clip(value, iw - 9))
 
-    def chip(wx, wy, line, label, text, colors, tail=""):
-        cv.put(wx + 2, wy + 1 + line, "%-9s" % label)
-        body = " %s " % text
-        cv.put(wx + 12, wy + 1 + line, body, *colors)
-        cv.put(wx + 12 + len(body), wy + 1 + line, _clip(tail, iw - 10 - len(body)))
-        return wx + 12 + len(body)
+    def chip(wx, wy, line, label, body, colors, tail=""):
+        cv.put(wx + 2, wy + 1 + line, "%-8s" % label)
+        body = " %s " % body
+        cv.put(wx + 11, wy + 1 + line, body, *colors)
+        cv.put(wx + 11 + len(body), wy + 1 + line, _clip(tail, iw - 9 - len(body)))
 
     def meter(x0, y0, width, value, maxv, cap=None, bad=False):
         fill = int(round(max(0.0, min(value, maxv)) / maxv * width)) if maxv else 0
@@ -1137,83 +1204,128 @@ def _compose(st, age, events, g, size=(80, 25), hint="", theme="turbo"):
             else:
                 cv.put(x0 + i, y0, g["empty"], T["trough"][0], tbg)
 
-    # --- Charger ---------------------------------------------------------------
+    def bar(wx, wy, line, label, value, maxv, shown, cap=None, bad=False):
+        cv.put(wx + 2, wy + 1 + line, "%-8s" % label)
+        meter(wx + 11, wy + 1 + line, bw, value, maxv, cap, bad)
+        cv.put(wx + 12 + bw, wy + 1 + line, _clip(shown, 7))
+
+    def column(x0, bottom, rows, frac, width, fg):
+        """A vertical bar growing up from `bottom`; returns the row of its top cell."""
+        eighths = int(round(max(0.0, min(frac, 1.0)) * rows * 8))
+        if frac > 0 and eighths == 0:
+            eighths = 1
+        full, part = divmod(eighths, 8)
+        for i in range(full):
+            cv.put(x0, bottom - i, g["full"] * width, fg)
+        if part and g["part"]:
+            cv.put(x0, bottom - full, g["part"][part - 1] * width, fg)
+        elif part >= 4:
+            cv.put(x0, bottom - full, g["full"] * width, fg)
+        return bottom - full - (0 if part else -1)
+
+    # --- Charger: every reading as a bar ----------------------------------------
     cv.window(lx, ty, ww, th, "Charger", T["main"], T["shadow"], g)
     t = st["telemetry"]
     f = t["fields"]
+    cap, circ = _ival(f, "M"), _ival(f, "m", 40) or 40
     if t["last"]:
         sc = f.get("S")
         sname = STATE_NAMES.get(sc, sc or "?").upper()
         scol = T[{"2": "ok", "1": "info", "0": "idle", "5": "bad"}.get(sc, "idle")]
-        age_s = "%ds ago" % t["age_s"] if t["age_s"] is not None else "?"
-        chip(lx, ty, 0, "State", sname, scol, " " + age_s)
-        a, cap, circ = _ival(f, "A") / 10.0, _ival(f, "M"), _ival(f, "m", 40) or 40
-        kv(lx, ty, 1, "Current", "%.1f A  cap %d  max %d" % (a, cap, circ))
-        meter(lx + 2, ty + 3, iw, a, circ, cap, bad=a > cap + 0.05)
-        kv(lx, ty, 3, "Volts", "%.1f V     Temp %s C" % (_ival(f, "V") / 10.0, f.get("T", "?")))
-        kv(lx, ty, 4, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0) if "E" in f else "-")
-        kv(lx, ty, 5, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
-        kv(lx, ty, 6, "Frames", "%d received" % t["frames"])
+        chip(lx, ty, 0, "State", sname, scol, " %ds ago" % t["age_s"] if t["age_s"] is not None else "")
+        a, v, temp = _ival(f, "A") / 10.0, _ival(f, "V") / 10.0, _ival(f, "T")
+        bar(lx, ty, 1, "Current", a, circ, "%.1f A" % a, cap, bad=a > cap + 0.05)
+        bar(lx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
+        bar(lx, ty, 3, "Volts", v - 200, 60, "%.1f V" % v, bad=not 210 <= v <= 255)
+        bar(lx, ty, 4, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
+        text(lx, ty, 5, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0) if "E" in f else "-")
+        text(lx, ty, 6, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
     else:
         cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper started", iw))
 
-    # --- Watchdog --------------------------------------------------------------
-    cv.window(rx, ty, ww, th, "Watchdog", T["win"], T["shadow"], g)
+    # --- Health: helper, link and the counters that have limits -------------------
+    cv.window(rx, ty, ww, th, "Health", T["win"], T["shadow"], g)
     w = st["watchdog"]
     try:
         up = _dur((now - datetime.datetime.fromisoformat(st["started"])).total_seconds())
     except (ValueError, TypeError, KeyError):
         up = "?"
     chip(rx, ty, 0, "Helper", "RUNNING" if alive else "STOPPED", T["ok"] if alive else T["bad"],
-         "  pid %s" % st["pid"])
-    kv(rx, ty, 1, "Uptime", up)
+         " up %s" % up)
     ws = w["state"]
     wcol = (T["ok"] if ws == "attached" else
             T["warn"] if ws in ("reattaching", "silent", "rebooting", "starting", "released") else T["bad"])
-    chip(rx, ty, 2, "State", ws, wcol, " since %s" % _hhmmss(w["since"])[:5])
-    cv.put(rx + 2, ty + 4, _clip(w["detail"], iw))
+    chip(rx, ty, 1, "Link", ws, wcol, " since %s" % _hhmmss(w["since"])[:5])
     nf = w["module_faults"]
     if nf is None:
-        kv(rx, ty, 4, "Faults", "unknown")
+        text(rx, ty, 2, "Faults", "unknown")
     else:
-        nf = int(nf)
-        end = chip(rx, ty, 4, "Faults", "%d/8" % nf, T["ok"] if nf <= 2 else T["warn"] if nf <= 5 else T["bad"])
-        meter(end + 1, ty + 5, min(16, iw - (end + 1 - rx - 2)), nf, 8, bad=nf > 5)
-    kv(rx, ty, 5, "Reboots", "%d in 24 h" % w["reboots_24h"])
-    kv(rx, ty, 6, "Limit", "%d corrections in 24 h" % st["limit"]["corrections_24h"])
-
-    # --- Network (two columns) --------------------------------------------------
-    cv.window(lx, ny, fw, nh, "Network", T["win"], T["shadow"], g)
+        bar(rx, ty, 2, "Faults", int(nf), 8, "%d/8" % int(nf), cap=Watchdog.FAULT_GUARD, bad=int(nf) > 5)
+    nr, nc = w["reboots_24h"], st["limit"]["corrections_24h"]
+    bar(rx, ty, 3, "Reboots", nr, Watchdog.REBOOTS_PER_DAY, "%d/%d" % (nr, Watchdog.REBOOTS_PER_DAY),
+        bad=nr >= Watchdog.REBOOTS_PER_DAY)
+    bar(rx, ty, 4, "Fixes", nc, LimitKeeper.DAILY_CAP, "%d/%d" % (nc, LimitKeeper.DAILY_CAP),
+        bad=nc >= LimitKeeper.DAILY_CAP)
+    rssi = (st["beacon"] or {}).get("rssi")
+    if isinstance(rssi, int):
+        bar(rx, ty, 5, "Signal", rssi + 90, 50, "%d dBm" % rssi, bad=rssi < -75)
+    else:
+        text(rx, ty, 5, "Signal", "no beacon")
     r = st["resolver"]
-    bcn = st["beacon"] or {}
-    rssi = bcn.get("rssi")
-    half = fw // 2
-    cols = [[("Resolver", "%d answers" % r["hijacks"]), ("Last ask", _hhmmss(r["last_hijack"])),
-             ("Source", t["from"] or "-"), ("Last fix", st["limit"]["outcome"] or "none")],
-            [("Beacon", bcn.get("ip", "-")), ("MAC", bcn.get("mac", "-")),
-             ("RSSI", "%s dBm" % rssi if rssi is not None else "-"),
-             ("Seen", _hhmmss(bcn["t"]) if bcn.get("t") else "-")]]
-    for c, col in enumerate(cols):
-        x0 = lx + 2 + c * half
-        for i, (label, value) in enumerate(col):
-            cv.put(x0, ny + 1 + i, "%-9s" % label)
-            cv.put(x0 + 10, ny + 1 + i, _clip(value, half - 14))
-            if label == "RSSI" and isinstance(rssi, int):
-                meter(x0 + 19, ny + 1 + i, min(14, half - 23), rssi + 90, 50, bad=rssi < -75)
+    text(rx, ty, 6, "Resolver", "%d answers, last %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5]))
 
-    # --- Event log -------------------------------------------------------------
+    # --- Chart: current per minute --------------------------------------------------
+    nb = iw - 3
+    cv.window(lx, cy, ww, chh, "Current per minute, A", T["win"], T["shadow"], g)
+    bottom = cy + 7
+    if hist:
+        cv.put(lx + 2, cy + 1, "%2d" % circ)
+        cv.put(lx + 2, bottom, " 0")
+        if 0 < cap < circ:
+            cv.put(lx + 2, bottom - int(cap / circ * 7), "%2d" % cap)
+        for i in range(nb):
+            key = (now - datetime.timedelta(minutes=nb - 1 - i)).strftime("%Y-%m-%dT%H:%M")
+            a = hist["amps"].get(key)
+            if a:
+                column(lx + 5 + i, bottom, 7, a / circ, 1, T["fillbad"] if a > cap + 0.05 else T["fill"])
+            else:
+                cv.put(lx + 5 + i, bottom, "_" if a is not None else " ")
+        cv.put(lx + 5, cy + 8, "-%dm" % nb)
+        cv.put(lx + 5 + nb - 3, cy + 8, "now")
+    else:
+        cv.put(lx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
+
+    # --- Chart: energy per day ------------------------------------------------------
+    cv.window(rx, cy, ww, chh, "Energy per day, kWh", T["win"], T["shadow"], g)
+    if hist and hist["days"]:
+        days = hist["days"]
+        top = max([k for _, k in days if k] or [1.0])
+        x0 = rx + 2 + max(0, (iw - 4 * len(days) + 1) // 2)
+        for i, (label, kwh) in enumerate(days):
+            xx = x0 + 4 * i
+            cv.put(xx, cy + 8, "%-3s" % label)
+            if kwh is None:
+                cv.put(xx, bottom, " - ")
+                continue
+            row = column(xx, bottom, 5, kwh / top, 3, T["fill"]) if kwh > 0 else bottom + 1
+            cv.put(xx, row - 1, ("%.0f" % kwh if kwh >= 10 else "%.1f" % kwh).center(3))
+    else:
+        cv.put(rx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
+
+    # --- Event log ------------------------------------------------------------------
     cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g)
     n = max(0, min(events, bh - 2)) if events else 0
     for i, e in enumerate(st["events"][-n:] if n else []):
-        cv.put(lx + 2, by + 1 + i, _hhmmss(e["t"]), T["logtime"])
-        cv.put(lx + 11, by + 1 + i, _clip(e["msg"], fw - 13), T["logtext"])
+        cv.put(lx + 2, by + 1 + i, str(e["t"])[:19].replace("T", " "), T["logtime"])
+        cv.put(lx + 22, by + 1 + i, _clip(e["msg"], fw - 24), T["logtext"])
     return cv
 
 
-def _dashboard(st, age, events, color=False, size=(80, 31), ascii_only=False, hint="", theme="turbo"):
+def _dashboard(st, age, events, color=False, size=(80, 31), ascii_only=False, hint="", theme="turbo",
+               hist=None):
     """The status screen as text: themed and full-colour, or plain ASCII when color is off."""
     glyphs = _ASC if (ascii_only or not color) else _UNI
-    return _compose(st, age, events, glyphs, size, hint, theme).render(color)
+    return _compose(st, age, events, glyphs, size, hint, theme, hist).render(color)
 
 
 def _keys():
@@ -1234,11 +1346,12 @@ def _watch(args, color, theme):
     try:
         while True:
             st, age = read_status(args.data_dir)
-            size = shutil.get_terminal_size((80, 25))
+            size = shutil.get_terminal_size((80, 30))
             if st is None:
                 frame = "\x1b[2Jwaiting for the helper to write status..."
             else:
-                frame = _dashboard(st, age, size[1], color, size, args.ascii, "T theme Q quit", theme)
+                frame = _dashboard(st, age, size[1], color, size, args.ascii, "T theme Q quit", theme,
+                                   load_history(args.data_dir))
             sys.stdout.write("\x1b[H" + frame)
             sys.stdout.flush()
             deadline = time.monotonic() + args.watch
@@ -1276,7 +1389,8 @@ def cmd_status(args):
         return 1
     if color:
         _enable_vt()
-    print(_dashboard(st, age, args.events, color, ascii_only=args.ascii, theme=theme))
+    print(_dashboard(st, age, args.events, color, ascii_only=args.ascii, theme=theme,
+                     hist=load_history(args.data_dir)))
     return 0 if age < 30 else 1
 
 
