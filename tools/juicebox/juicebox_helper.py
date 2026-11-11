@@ -918,44 +918,366 @@ def read_status(data_dir):
     return st, (datetime.datetime.now() - written).total_seconds()
 
 
+def _dur(secs):
+    secs = max(0, int(secs))
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    if d:
+        return "%dd%dh" % (d, h)
+    if h:
+        return "%dh%dm" % (h, m)
+    return "%dm%ds" % (m, s)
+
+
+def _hhmmss(iso):
+    try:
+        return datetime.datetime.fromisoformat(iso).strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        return str(iso)
+
+
+# ---- status TUI: a cell canvas themed after Turbo Vision / TuiCss ----
+_UNI = {"h": "═", "v": "║", "tl": "╔", "tr": "╗", "bl": "╚", "br": "╝",
+        "full": "█", "empty": "░", "desk": "░", "sep": "│"}
+_ASC = {"h": "=", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+",
+        "full": "#", "empty": ".", "desk": " ", "sep": "|"}
+
+# Colours are ANSI SGR numbers: (fg, bg) pairs, or a lone fg. tools/juicebox/monitor/
+# OpenJuiceMonitor.cs carries the same table; change both together.
+THEMES = {
+    "turbo": dict(pattern=True, desk=(94, 44), bar=(30, 47), key=31, main=(30, 46), win=(30, 47),
+                  log=(97, 40), logtime=93, logtext=37, shadow=(90, 40), trough=(90, 40),
+                  fill=92, fillbad=91, tick=93,
+                  ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(97, 44), idle=(97, 100)),
+    "commander": dict(pattern=False, desk=(90, 40), bar=(30, 46), key=31, main=(97, 44), win=(96, 44),
+                      log=(96, 44), logtime=93, logtext=97, shadow=(90, 40), trough=(94, 40),
+                      fill=96, fillbad=91, tick=93,
+                      ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(30, 46), idle=(30, 47)),
+    "phosphor": dict(pattern=False, desk=(32, 40), bar=(30, 42), key=97, main=(92, 40), win=(32, 40),
+                     log=(32, 40), logtime=92, logtext=32, shadow=(32, 40), trough=(32, 40),
+                     fill=92, fillbad=97, tick=97,
+                     ok=(30, 42), warn=(30, 102), bad=(30, 107), info=(30, 42), idle=(92, 40)),
+    "amber": dict(pattern=False, desk=(33, 40), bar=(30, 43), key=97, main=(93, 40), win=(33, 40),
+                  log=(33, 40), logtime=93, logtext=33, shadow=(33, 40), trough=(33, 40),
+                  fill=93, fillbad=97, tick=97,
+                  ok=(30, 43), warn=(30, 103), bad=(30, 107), info=(30, 43), idle=(93, 40)),
+    "light": dict(pattern=True, desk=(37, 107), bar=(97, 44), key=93, main=(30, 47), win=(30, 47),
+                  log=(30, 107), logtime=34, logtext=30, shadow=(37, 100), trough=(37, 100),
+                  fill=92, fillbad=91, tick=93,
+                  ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(97, 44), idle=(97, 100)),
+}
+THEME_ORDER = ["turbo", "commander", "phosphor", "amber", "light"]
+
+
+def load_theme(data_dir):
+    """The theme last chosen here or in the desktop monitor (ui.json), else turbo."""
+    try:
+        with open(os.path.join(data_dir, "ui.json"), encoding="utf-8") as f:
+            name = json.load(f).get("theme")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return name if name in THEMES else "turbo"
+
+
+def save_theme(data_dir, name):
+    path = os.path.join(data_dir, "ui.json")
+    try:
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"theme": name}, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
+class _Canvas:
+    """A grid of (char, fg, bg) cells; fg/bg are ANSI SGR numbers (30-37/90-97, 40-47/100-107)."""
+
+    def __init__(self, w, h, ch, fg, bg):
+        self.w, self.h = w, h
+        self.cells = [[(ch, fg, bg)] * w for _ in range(h)]
+
+    def put(self, x, y, text, fg=None, bg=None):
+        if not 0 <= y < self.h:
+            return
+        row = self.cells[y]
+        for i, ch in enumerate(text):
+            if 0 <= x + i < self.w:
+                _, f0, b0 = row[x + i]
+                row[x + i] = (ch, f0 if fg is None else fg, b0 if bg is None else bg)
+
+    def fill(self, x, y, w, h, ch, fg, bg):
+        for yy in range(y, y + h):
+            self.put(x, yy, ch * w, fg, bg)
+
+    def shade(self, x, y, w, h, fg, bg):
+        for yy in range(max(0, y), min(self.h, y + h)):
+            for xx in range(max(0, x), min(self.w, x + w)):
+                self.cells[yy][xx] = (self.cells[yy][xx][0], fg, bg)
+
+    def window(self, x, y, w, h, title, colors, shadow, g):
+        fg, bg = colors
+        self.shade(x + 2, y + 1, w, h, *shadow)             # drop shadow
+        self.fill(x, y, w, h, " ", fg, bg)
+        self.put(x, y, g["tl"] + g["h"] * (w - 2) + g["tr"])
+        self.put(x, y + h - 1, g["bl"] + g["h"] * (w - 2) + g["br"])
+        for yy in range(y + 1, y + h - 1):
+            self.put(x, yy, g["v"])
+            self.put(x + w - 1, yy, g["v"])
+        t = " %s " % title
+        self.put(x + (w - len(t)) // 2, y, t)
+
+    def render(self, color):
+        lines = []
+        for row in self.cells:
+            if not color:
+                lines.append("".join(c for c, _, _ in row).rstrip())
+                continue
+            out, cur = [], None
+            for ch, f, b in row:
+                if (f, b) != cur:
+                    out.append("\x1b[%d;%dm" % (f, b))
+                    cur = (f, b)
+                out.append(ch)
+            out.append("\x1b[0m")
+            lines.append("".join(out))
+        return "\n".join(lines)
+
+
+def _enable_vt():
+    """Turn on ANSI handling in a Windows console; no-op elsewhere or on failure."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, mode.value | 0x0004)   # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except Exception:
+        pass
+
+
+def _use_color(args):
+    if getattr(args, "no_color", False):
+        return False
+    if getattr(args, "color", False):
+        return True
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def _ival(f, k, d=0):
+    try:
+        return int(f[k])
+    except (KeyError, ValueError, TypeError):
+        return d
+
+
+def _clip(s, n):
+    s = str(s)
+    return s if len(s) <= n else s[:max(0, n - 3)] + "..."
+
+
+def _compose(st, age, events, g, size=(80, 25), hint="", theme="turbo"):
+    """Lay the status snapshot out as windows on a desktop. Returns a _Canvas."""
+    T = THEMES.get(theme, THEMES["turbo"])
+    W, H = max(80, size[0]), max(25, size[1])
+    now = datetime.datetime.now()
+    alive = age < 30
+    cv = _Canvas(W, H, g["desk"] if T["pattern"] else " ", *T["desk"])
+
+    cv.fill(0, 0, W, 1, " ", *T["bar"])                     # title bar
+    cv.put(1, 0, "OpenJuice", T["key"])
+    cv.put(11, 0, "%s JuiceBox Gen 1 %s local control" % (g["sep"], g["sep"]))
+    clock = now.strftime("%Y-%m-%d %H:%M:%S")
+    cv.put(W - len(clock) - 1, 0, clock)
+
+    cv.fill(0, H - 1, W, 1, " ", *T["bar"])                 # status bar
+    items = [("Mode", str(st["mode"])), ("Target", "%d A" % st["target_amps"]),
+             ("Age", "%ds" % int(age)), ("Theme", theme)]
+    if hint:
+        items.append(("Keys", hint))
+    x = 1
+    for key, text in items:
+        cv.put(x, H - 1, key, T["key"])
+        cv.put(x + len(key) + 1, H - 1, text)
+        x += len(key) + len(text) + 2
+        cv.put(x, H - 1, g["sep"])
+        x += 2
+
+    ww = (W - 6) // 2
+    lx, rx, ty, th = 2, 2 + ww + 2, 2, 9
+    fw, ny, nh, by, bh = 2 * ww + 2, 12, 6, 19, H - 21     # full-width Network strip and Event log
+    iw = ww - 4                                             # text columns inside a window
+
+    def kv(wx, wy, line, label, value, fg=None):
+        cv.put(wx + 2, wy + 1 + line, "%-9s" % label)
+        cv.put(wx + 12, wy + 1 + line, _clip(value, iw - 10), fg)
+
+    def chip(wx, wy, line, label, text, colors, tail=""):
+        cv.put(wx + 2, wy + 1 + line, "%-9s" % label)
+        body = " %s " % text
+        cv.put(wx + 12, wy + 1 + line, body, *colors)
+        cv.put(wx + 12 + len(body), wy + 1 + line, _clip(tail, iw - 10 - len(body)))
+        return wx + 12 + len(body)
+
+    def meter(x0, y0, width, value, maxv, cap=None, bad=False):
+        fill = int(round(max(0.0, min(value, maxv)) / maxv * width)) if maxv else 0
+        tick = min(width - 1, int(round(cap / maxv * width))) if (cap is not None and maxv) else -1
+        tbg = T["trough"][1]
+        for i in range(width):
+            if i < fill:
+                cv.put(x0 + i, y0, g["full"], T["fillbad"] if bad else T["fill"], tbg)
+            elif i == tick:
+                cv.put(x0 + i, y0, g["sep"], T["tick"], tbg)
+            else:
+                cv.put(x0 + i, y0, g["empty"], T["trough"][0], tbg)
+
+    # --- Charger ---------------------------------------------------------------
+    cv.window(lx, ty, ww, th, "Charger", T["main"], T["shadow"], g)
+    t = st["telemetry"]
+    f = t["fields"]
+    if t["last"]:
+        sc = f.get("S")
+        sname = STATE_NAMES.get(sc, sc or "?").upper()
+        scol = T[{"2": "ok", "1": "info", "0": "idle", "5": "bad"}.get(sc, "idle")]
+        age_s = "%ds ago" % t["age_s"] if t["age_s"] is not None else "?"
+        chip(lx, ty, 0, "State", sname, scol, " " + age_s)
+        a, cap, circ = _ival(f, "A") / 10.0, _ival(f, "M"), _ival(f, "m", 40) or 40
+        kv(lx, ty, 1, "Current", "%.1f A  cap %d  max %d" % (a, cap, circ))
+        meter(lx + 2, ty + 3, iw, a, circ, cap, bad=a > cap + 0.05)
+        kv(lx, ty, 3, "Volts", "%.1f V     Temp %s C" % (_ival(f, "V") / 10.0, f.get("T", "?")))
+        kv(lx, ty, 4, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0) if "E" in f else "-")
+        kv(lx, ty, 5, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
+        kv(lx, ty, 6, "Frames", "%d received" % t["frames"])
+    else:
+        cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper started", iw))
+
+    # --- Watchdog --------------------------------------------------------------
+    cv.window(rx, ty, ww, th, "Watchdog", T["win"], T["shadow"], g)
+    w = st["watchdog"]
+    try:
+        up = _dur((now - datetime.datetime.fromisoformat(st["started"])).total_seconds())
+    except (ValueError, TypeError, KeyError):
+        up = "?"
+    chip(rx, ty, 0, "Helper", "RUNNING" if alive else "STOPPED", T["ok"] if alive else T["bad"],
+         "  pid %s" % st["pid"])
+    kv(rx, ty, 1, "Uptime", up)
+    ws = w["state"]
+    wcol = (T["ok"] if ws == "attached" else
+            T["warn"] if ws in ("reattaching", "silent", "rebooting", "starting", "released") else T["bad"])
+    chip(rx, ty, 2, "State", ws, wcol, " since %s" % _hhmmss(w["since"])[:5])
+    cv.put(rx + 2, ty + 4, _clip(w["detail"], iw))
+    nf = w["module_faults"]
+    if nf is None:
+        kv(rx, ty, 4, "Faults", "unknown")
+    else:
+        nf = int(nf)
+        end = chip(rx, ty, 4, "Faults", "%d/8" % nf, T["ok"] if nf <= 2 else T["warn"] if nf <= 5 else T["bad"])
+        meter(end + 1, ty + 5, min(16, iw - (end + 1 - rx - 2)), nf, 8, bad=nf > 5)
+    kv(rx, ty, 5, "Reboots", "%d in 24 h" % w["reboots_24h"])
+    kv(rx, ty, 6, "Limit", "%d corrections in 24 h" % st["limit"]["corrections_24h"])
+
+    # --- Network (two columns) --------------------------------------------------
+    cv.window(lx, ny, fw, nh, "Network", T["win"], T["shadow"], g)
+    r = st["resolver"]
+    bcn = st["beacon"] or {}
+    rssi = bcn.get("rssi")
+    half = fw // 2
+    cols = [[("Resolver", "%d answers" % r["hijacks"]), ("Last ask", _hhmmss(r["last_hijack"])),
+             ("Source", t["from"] or "-"), ("Last fix", st["limit"]["outcome"] or "none")],
+            [("Beacon", bcn.get("ip", "-")), ("MAC", bcn.get("mac", "-")),
+             ("RSSI", "%s dBm" % rssi if rssi is not None else "-"),
+             ("Seen", _hhmmss(bcn["t"]) if bcn.get("t") else "-")]]
+    for c, col in enumerate(cols):
+        x0 = lx + 2 + c * half
+        for i, (label, value) in enumerate(col):
+            cv.put(x0, ny + 1 + i, "%-9s" % label)
+            cv.put(x0 + 10, ny + 1 + i, _clip(value, half - 14))
+            if label == "RSSI" and isinstance(rssi, int):
+                meter(x0 + 19, ny + 1 + i, min(14, half - 23), rssi + 90, 50, bad=rssi < -75)
+
+    # --- Event log -------------------------------------------------------------
+    cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g)
+    n = max(0, min(events, bh - 2)) if events else 0
+    for i, e in enumerate(st["events"][-n:] if n else []):
+        cv.put(lx + 2, by + 1 + i, _hhmmss(e["t"]), T["logtime"])
+        cv.put(lx + 11, by + 1 + i, _clip(e["msg"], fw - 13), T["logtext"])
+    return cv
+
+
+def _dashboard(st, age, events, color=False, size=(80, 31), ascii_only=False, hint="", theme="turbo"):
+    """The status screen as text: themed and full-colour, or plain ASCII when color is off."""
+    glyphs = _ASC if (ascii_only or not color) else _UNI
+    return _compose(st, age, events, glyphs, size, hint, theme).render(color)
+
+
+def _keys():
+    """Keys pressed since the last call (Windows console only)."""
+    if os.name != "nt":
+        return ""
+    import msvcrt
+    out = ""
+    while msvcrt.kbhit():
+        out += msvcrt.getwch()
+    return out.lower()
+
+
+def _watch(args, color, theme):
+    import shutil
+    _enable_vt()
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")               # alternate screen, hide cursor
+    try:
+        while True:
+            st, age = read_status(args.data_dir)
+            size = shutil.get_terminal_size((80, 25))
+            if st is None:
+                frame = "\x1b[2Jwaiting for the helper to write status..."
+            else:
+                frame = _dashboard(st, age, size[1], color, size, args.ascii, "T theme Q quit", theme)
+            sys.stdout.write("\x1b[H" + frame)
+            sys.stdout.flush()
+            deadline = time.monotonic() + args.watch
+            while time.monotonic() < deadline:
+                keys = _keys()
+                if "q" in keys:
+                    return 0
+                if "t" in keys:
+                    theme = THEME_ORDER[(THEME_ORDER.index(theme) + 1) % len(THEME_ORDER)]
+                    save_theme(args.data_dir, theme)
+                    break
+                time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write("\x1b[0m\x1b[?25h\x1b[?1049l")     # restore cursor and screen
+        sys.stdout.flush()
+    return 0
+
+
 def cmd_status(args):
+    color = _use_color(args)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8" if color else None, errors="replace")
+    except Exception:
+        pass
+    theme = args.theme or load_theme(args.data_dir)
+    if args.theme:
+        save_theme(args.data_dir, theme)                   # an explicit choice becomes the default
+    if getattr(args, "watch", 0):
+        return _watch(args, color, theme)
     st, age = read_status(args.data_dir)
     if st is None:
         print("no status file in %s; the helper has not run" % args.data_dir)
         return 1
-    alive = age < 30
-    print("helper    : %s (pid %s, started %s; status %ds old)"
-          % ("RUNNING" if alive else "NOT RUNNING", st["pid"], st["started"], age))
-    w = st["watchdog"]
-    print("mode      : %s, target %d A" % (st["mode"], st["target_amps"]))
-    print("watchdog  : %s since %s -- %s" % (w["state"], w["since"], w["detail"]))
-    print("            module faults %s of 8, helper reboots in 24 h: %d"
-          % (w["module_faults"] if w["module_faults"] is not None else "?", w["reboots_24h"]))
-    t = st["telemetry"]
-    f = t["fields"]
-    if t["last"]:
-        amps = "%.1f A" % (int(f["A"]) / 10.0) if "A" in f else "-"
-        print("telemetry : %s, %s ago, %d frames from %s"
-              % (t["last"], "%ds" % t["age_s"] if t["age_s"] is not None else "?", t["frames"], t["from"]))
-        print("            %s, current %s, limit %s A (circuit %s A), %s V, %s C"
-              % (STATE_NAMES.get(f.get("S"), f.get("S", "?")), amps, f.get("M", "?"), f.get("m", "?"),
-                 "%.1f" % (int(f["V"]) / 10.0) if "V" in f else "?", f.get("T", "?")))
-        if "L" in f:
-            print("            lifetime %s Wh%s" % ("{:,}".format(int(f["L"])),
-                                                    ", session %s Wh" % int(f["E"]) if "E" in f else ""))
-    else:
-        print("telemetry : none received since the helper started")
-    r = st["resolver"]
-    print("resolver  : %d answers to the charger, last %s" % (r["hijacks"], r["last_hijack"]))
-    if st["beacon"]:
-        print("beacon    : %s, rssi %s, at %s" % (st["beacon"]["ip"], st["beacon"]["rssi"], st["beacon"]["t"]))
-    lim = st["limit"]
-    print("limit     : %d corrections in 24 h; last: %s" % (lim["corrections_24h"], lim["outcome"] or "none"))
-    if st["events"]:
-        print("recent    :")
-        for e in st["events"][-args.events:]:
-            print("   %s  %s" % (e["t"], e["msg"]))
-    return 0 if alive else 1
+    if color:
+        _enable_vt()
+    print(_dashboard(st, age, args.events, color, ascii_only=args.ascii, theme=theme))
+    return 0 if age < 30 else 1
 
 
 def _wait_for(data_dir, pred, seconds):
@@ -1025,7 +1347,14 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run", help="run the service loop")
     p = sub.add_parser("status", help="show what the helper last saw and did")
-    p.add_argument("--events", type=int, default=10)
+    p.add_argument("--events", type=int, default=8)
+    p.add_argument("--ascii", action="store_true", help="ASCII borders and meters instead of box-drawing")
+    p.add_argument("--theme", choices=THEME_ORDER,
+                   help="colour theme; remembered as the default (T cycles themes in --watch)")
+    p.add_argument("--watch", nargs="?", type=float, const=2.0, default=0.0, metavar="SECONDS",
+                   help="live full-screen dashboard, refreshed every SECONDS (default 2); Ctrl-C to quit")
+    p.add_argument("--color", action="store_true", help="force ANSI color even when not a TTY")
+    p.add_argument("--no-color", action="store_true", help="disable ANSI color")
     p = sub.add_parser("target", help="change the current limit the helper keeps")
     p.add_argument("amps", type=int, choices=range(J1772_MIN, HARD_MAX + 1), metavar="AMPS")
     sub.add_parser("release", help="hand the charger back to the cloud and stop reattaching")

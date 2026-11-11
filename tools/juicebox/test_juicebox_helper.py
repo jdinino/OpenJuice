@@ -466,5 +466,45 @@ class TestResolverSelftest(unittest.TestCase):
         self.assertFalse(h.resolver_selftest(port=free_udp_port(), attempts=3, timeout=0.2))
 
 
+class TestStatusScreen(unittest.TestCase):
+    """The status TUI: plain ASCII when colour is off, themed when on, never crashing on gaps."""
+
+    def snapshot(self, **over):
+        st = {"pid": 1, "started": "2026-01-01T00:00:00", "mode": "local", "target_amps": 26,
+              "watchdog": {"state": "attached", "detail": "telemetry arriving",
+                           "since": "2026-01-01T00:00:05", "reboots_24h": 0, "module_faults": 3},
+              "telemetry": {"last": "2026-01-01T00:10:00", "age_s": 2, "frames": 9,
+                            "from": "192.168.1.63:5000",
+                            "fields": {"S": "2", "A": "0257", "M": "26", "m": "40", "V": "2361",
+                                       "T": "20", "E": "012785", "L": "0029163065"}},
+              "resolver": {"last_hijack": "2026-01-01T00:09:00", "hijacks": 4},
+              "beacon": {"ip": "192.168.1.63", "rssi": -71, "mac": "AA:BB", "t": "2026-01-01T00:09:30"},
+              "limit": {"outcome": None, "corrections_24h": 0},
+              "events": [{"t": "2026-01-01T00:00:05", "msg": "attached: telemetry arriving " + "x" * 90}]}
+        st.update(over)
+        return st
+
+    def test_plain_is_ascii_and_fixed_height(self):
+        text = h._dashboard(self.snapshot(), 2, 8, color=False)
+        self.assertNotIn("\x1b", text)
+        text.encode("ascii")                                   # no box-drawing when colour is off
+        self.assertEqual(len(text.split("\n")), 31)
+        for needle in ("CHARGING", "25.7 A", "3/8", "RUNNING", "12.785 kWh", "-71 dBm"):
+            self.assertIn(needle, text)
+
+    def test_themed_fills_every_cell(self):
+        text = h._dashboard(self.snapshot(), 2, 8, color=True, size=(100, 40))
+        lines = text.split("\n")
+        self.assertEqual(len(lines), 40)
+        self.assertTrue(all(ln.startswith("\x1b[") and ln.endswith("\x1b[0m") for ln in lines))
+
+    def test_gaps_do_not_crash(self):
+        st = self.snapshot(beacon=None, events=[])
+        st["watchdog"]["module_faults"] = None
+        st["telemetry"] = {"last": None, "age_s": None, "frames": 0, "from": None, "fields": {}}
+        self.assertIn("no telemetry", h._dashboard(st, 99, 8))
+        self.assertIn("STOPPED", h._dashboard(st, 99, 8))
+
+
 if __name__ == "__main__":
     unittest.main()
