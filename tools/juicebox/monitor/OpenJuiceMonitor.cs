@@ -10,6 +10,7 @@
 // tools/juicebox/juicebox_helper.py -- change both together.
 //
 //   OpenJuiceMonitor.exe                         run the monitor
+//   OpenJuiceMonitor.exe --tray                  run it hidden in the tray (what "Start with Windows" uses)
 //   OpenJuiceMonitor.exe --snapshot out.png [theme [datadir]]   draw one frame to a PNG and exit
 //   OpenJuiceMonitor.exe --icons out.png         draw every state icon to a PNG and exit
 //   OpenJuiceMonitor.exe --file-icon out.ico     write the exe's own icon (16 to 256 px); build_monitor.ps1 embeds it
@@ -26,6 +27,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace OpenJuice
 {
@@ -430,6 +432,40 @@ namespace OpenJuice
                 }
                 big.Save(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFileNameWithoutExtension(path) + "_256.png"), ImageFormat.Png);
             }
+        }
+    }
+
+    // "Start with Windows": a per-user Run entry that launches the monitor hidden in the tray.
+    static class AutoStart
+    {
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", Name = "OpenJuiceMonitor";
+
+        static string Command { get { return "\"" + Application.ExecutablePath + "\" --tray"; } }
+
+        public static bool Enabled
+        {
+            get
+            {
+                try
+                {
+                    using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey))
+                        return k != null && string.Equals(k.GetValue(Name) as string, Command, StringComparison.OrdinalIgnoreCase);
+                }
+                catch (Exception) { return false; }
+            }
+        }
+
+        public static void Set(bool on)
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
+                {
+                    if (on) k.SetValue(Name, Command);
+                    else k.DeleteValue(Name, false);
+                }
+            }
+            catch (Exception) { }
         }
     }
 
@@ -854,11 +890,13 @@ namespace OpenJuice
         ToolStripMenuItem chimeItem;
         Canvas canvas;
         int theme;
-        bool quitting;
+        bool quitting, startHidden;
+        ToolStripMenuItem startupItem;
 
-        public MonitorForm(string dataDir)
+        public MonitorForm(string dataDir, bool startHidden)
         {
             this.dataDir = dataDir;
+            this.startHidden = startHidden;
             Text = "OpenJuice Monitor";
             font = Program.MakeFont();
             Program.Measure(font, out cw, out ch);
@@ -880,10 +918,14 @@ namespace OpenJuice
             menu.Items.Add(themes);
             menu.Items.Add(chimeItem);
             menu.Items.Add(new ToolStripMenuItem("Test chime", null, delegate { Chime(null); }));
+            startupItem = new ToolStripMenuItem("Start with Windows, in the tray") { CheckOnClick = true, Checked = AutoStart.Enabled };
+            startupItem.Click += delegate { AutoStart.Set(startupItem.Checked); startupItem.Checked = AutoStart.Enabled; };
+            menu.Items.Add(startupItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Exit", null, delegate { quitting = true; Close(); }));
             menu.Opening += delegate
             {
+                startupItem.Checked = AutoStart.Enabled;
                 for (int i = 0; i < themes.DropDownItems.Count; i++) ((ToolStripMenuItem)themes.DropDownItems[i]).Checked = i == theme;
             };
             ContextMenuStrip = menu;
@@ -914,6 +956,18 @@ namespace OpenJuice
             tray.Icon = trayIcon = StateIcon.MakeTray(kind, amps, rating);
             if (oldWindow != null) oldWindow.Dispose();           // only ever the ones made here
             if (oldTray != null) oldTray.Dispose();
+        }
+
+        // Launched with --tray: stay hidden until the tray icon is used.
+        protected override void SetVisibleCore(bool value)
+        {
+            if (startHidden)
+            {
+                startHidden = false;
+                if (!IsHandleCreated) CreateHandle();
+                value = false;
+            }
+            base.SetVisibleCore(value);
         }
 
         void Restore() { Show(); WindowState = FormWindowState.Normal; Activate(); }
@@ -1153,7 +1207,12 @@ namespace OpenJuice
                 }
                 return 0;
             }
-            Application.Run(new MonitorForm(dir));
+            bool created;
+            using (System.Threading.Mutex one = new System.Threading.Mutex(true, "OpenJuiceMonitor.single", out created))
+            {
+                if (!created) return 0;                         // already running: its icon is in the tray
+                Application.Run(new MonitorForm(dir, Array.IndexOf(args, "--tray") >= 0));
+            }
             return 0;
         }
     }
