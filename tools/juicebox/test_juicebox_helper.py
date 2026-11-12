@@ -546,6 +546,11 @@ class TestStatusScreen(unittest.TestCase):
         self.assertIn("#", text.split("Current per minute")[1])        # a column was drawn
         self.assertIsNone(h.load_history(os.path.join(tmp, "missing")))
 
+    def test_resolver_row_before_the_first_request(self):
+        text = h._dashboard(self.snapshot(resolver={"last_hijack": None, "hijacks": 0}), 2, 8)
+        self.assertIn("Resolver no requests yet", text)
+        self.assertNotIn("None", text)
+
     def test_finished_charge_is_marked(self):
         import datetime
         now = datetime.datetime.now()

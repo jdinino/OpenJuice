@@ -629,7 +629,9 @@ namespace OpenJuice
             else Text(cv, rx, ty, 5, "Signal", "no beacon", iw);
             object r = J.Get(st, "resolver");
             string lastAsk = Hms(J.S(r, "last_hijack", null));
-            Text(cv, rx, ty, 6, "Resolver", J.I(r, "hijacks", 0) + " answers at " + (lastAsk.Length >= 5 ? lastAsk.Substring(0, 5) : lastAsk), iw);
+            Text(cv, rx, ty, 6, "Resolver", J.Has(r, "last_hijack")
+                ? J.I(r, "hijacks", 0) + " answers at " + (lastAsk.Length >= 5 ? lastAsk.Substring(0, 5) : lastAsk)
+                : "no requests yet", iw);
 
             // --- Chart: current per minute
             int nb = iw - 3, bottom = cy + 6;

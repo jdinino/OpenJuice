@@ -1387,7 +1387,8 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
     else:
         text(rx, ty, 5, "Signal", "no beacon")
     r = st["resolver"]
-    text(rx, ty, 6, "Resolver", "%d answers at %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5]))
+    text(rx, ty, 6, "Resolver", "%d answers at %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5])
+         if r.get("last_hijack") else "no requests yet")
 
     # --- Chart: current per minute --------------------------------------------------
     nb = iw - 3
