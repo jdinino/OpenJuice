@@ -61,7 +61,7 @@ Wire format: [../docs/juicebox/JuiceNet-Protocol.md](../docs/juicebox/JuiceNet-P
 | `read_counters.py` | Read-only snapshot: uptime, module fault count, lifetime energy, 5-minute history, session events | No |
 | `juicebox_rawcap.py` | Legacy Npcap method: captures telemetry in transit to the real cloud and spoofs the cloud's reply. Needs Npcap and scapy, and the charger's gateway pointed at this PC | Only with `--send` |
 | `charge_notifier.py` | Plays a Windows sound when a charge completes (charging, then idle, with at least 0.1 kWh delivered). Reads `status.json` only. `watch`, `test-sound`, `replay LOG` | No |
-| `monitor/OpenJuiceMonitor.cs` | Desktop window and tray icon showing the same themed status screen as `status --watch`, with a charge-complete chime. Its icon follows the charger: tile colour is the state, the cord circle is a gauge of amps against the circuit rating, and the tray shows the amps as a number. Its tray menu has "Start with Windows, in the tray" (a per-user Run entry launching it with `--tray`). Reads `status.json` only. Build with `monitor/build_monitor.ps1` (uses the C# compiler that ships with Windows) | No |
+| `monitor/OpenJuiceMonitor.cs` | Desktop window and tray icon showing the same themed status screen as `status --watch`, with a charge-complete chime. Its icon follows the charger: tile colour is the state, the cord circle is a gauge of amps against the circuit rating, and the tray shows the amps as a number. Its tray menu has "Start with Windows, in the tray" (a per-user Run entry launching it with `--tray`). Reads `status.json`; it never contacts the charger. Its menu has two controls, each behind a Yes/No box: "Set current limit" writes `target_amps` to `helper.json`, and "Clear fault log" writes a one-shot `clear_faults` request there for the running helper to carry out. Both the monitor window and the terminal screen (`status --watch`) carry them in a menu bar: F10, F9 or M highlights it and Enter opens the menu; Alt+C and Alt+T open the Charger and Theme menus directly; arrows, Home/End and the highlighted letters choose, Esc closes. Shortcuts outside the menus: L or F2 (limit), F or F8 (faults), T or F5 (next theme), F1 (about), and Alt+X or Q to leave the terminal screen. Keys are the same in every theme; a theme changes only the drawing. Each theme follows one of three period styles: Turbo Vision (grey dialogs with a close box, green buttons with a half-block shadow, single frames on all but the main window), Norton Commander/FAR for `commander` (cyan menus, `{ No }` as the default button, red boxes for irreversible actions, a numbered function-key bar), and one-hue for `phosphor`, `amber` and `mono` (reverse video, `< OK >` buttons, `F10=Menu`). No is always the default answer. The Charger box has a Limit row: the limit the charger reports, flagged when it differs from the helper's target. The monitor's menus, buttons and close box also take mouse clicks. The menu, dialog and style code exists in both `juicebox_helper.py` (`_Ui`, `_style`) and `OpenJuiceMonitor.cs` (`Ui`, `Style`); change both together. `OpenJuiceMonitor.exe --snapshot out.txt THEME DATADIR KEYS` dumps the cell grid so the two can be compared. Build with `monitor/build_monitor.ps1` (uses the C# compiler that ships with Windows) | No |
 | `avr_pinmap.py` | Hints at ATmega328P pin usage from a firmware image. **Corroboration only**: calibrated against V8.9 and found to miss the relay and GFI pins | No |
 
 ### Unattended: `juicebox_helper.py`
@@ -136,16 +136,16 @@ Config, logs and telemetry live in `%LOCALAPPDATA%\OpenJuice`: `helper.json` for
 collector's format.
 
 **What it will and will not do to the charger.** Every module command goes through one allowlist:
-`get`, `faults_print`, `set wlan.dhcp.enabled 0` (never saved), `network_restart` and `reboot`.
+`get`, `faults_print`, `faults_reset` (owner request only), `set wlan.dhcp.enabled 0` (never saved),
+`network_restart` and `reboot`.
 Before switching DHCP off it checks that the charger's saved static address, gateway and DNS lead
 back to this PC. It pauses local control at 6 module faults of 8, because Safe Mode starts at 8 —
 but while paused the cap is **unenforced** (the module sits at its 40 A ceiling and the car can pull
-its full draw, ~32 A), so clear the log promptly. `faults_reset` is deliberately **not** on the
-allowlist; clearing is the owner's decision, sent by hand: `release` the helper first (frees the
-module's one command parser), then `GET http://<charger>/command/faults_reset`, confirm with
-`faults_print` (empty = 0 of 8), then `attach`. After clearing, a stale precheck block can keep the
-helper paused for up to an hour (`BLOCK_BACKOFF`); nudge `target` to a different value to lift it at
-once. Reboots are rate limited to one per 20 minutes and four per day. Limit corrections are capped
+its full draw, ~32 A), so clear the log promptly. Clearing is the owner's decision: the helper sends `faults_reset` only when asked, by
+`juicebox_helper.py clear-faults` or the monitor's "Clear fault log", both of which ask first. The
+request is a timestamp in `helper.json`; the helper handles it once, removes it, ignores one older
+than 5 minutes, copies the log entries to `helper.log`, then clears and re-reads the count. A
+successful clear also lifts a fault block at once. Reboots are rate limited to one per 20 minutes and four per day. Limit corrections are capped
 at 12 per day to spare the EEPROM.
 
 **Before a planned long PC outage**, run `release`, and `attach` on return: the released mode is

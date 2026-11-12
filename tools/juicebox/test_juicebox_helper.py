@@ -4,6 +4,7 @@ are faked or run on loopback.
 
   python -m unittest tools/juicebox/test_juicebox_helper.py -v
 """
+import datetime
 import http.server
 import logging
 import os
@@ -89,6 +90,232 @@ class WatchdogCase(unittest.TestCase):
             self.assertNotIn("save", c)
             self.assertNotIn("zap", c)
             self.assertFalse(c.startswith("set ") and c != "set wlan.dhcp.enabled 0", c)
+
+
+class ClearableModule(FakeModule):
+    """A fault log that faults_reset really empties."""
+
+    def command(self, cmd, timeout=None):
+        r = super().command(cmd, timeout)
+        if cmd == "faults_reset" and r.kind == h.OK:
+            self.replies["faults_print"] = h.Reply(h.OK, 0, "")
+        return r
+
+
+class TestClearFaults(WatchdogCase):
+    def start(self, when, reset=None):
+        self.make(STATIC_OK)
+        replies = dict(self.m.replies, faults_reset=reset or h.Reply(h.OK, 0, "Success"))
+        self.m = self.wd.module = ClearableModule(replies)
+        self.forgotten = []
+        self.wd.forget = self.forgotten.append
+        self.cfg["clear_faults"] = when.isoformat(timespec="seconds")
+
+    def test_owner_request_clears_once_and_is_forgotten(self):
+        self.start(datetime.datetime.now())
+        self.run_for(60, telemetry=True)
+        self.assertEqual(self.m.count("faults_reset"), 1)       # the request stayed in cfg; still once
+        self.assertEqual(self.forgotten, ["clear_faults"])
+        self.assertEqual(self.wd.faults, 0)
+        self.assertTrue(any("3 to 0 of 8" in e["msg"] for e in self.shared.events))
+
+    def test_stale_request_is_dropped_unsent(self):
+        self.start(datetime.datetime.now() - datetime.timedelta(hours=1))
+        self.run_for(60, telemetry=True)
+        self.assertEqual(self.m.count("faults_reset"), 0)
+        self.assertEqual(self.forgotten, ["clear_faults"])
+
+    def test_failed_clear_is_reported_and_not_retried(self):
+        self.start(datetime.datetime.now(), reset=h.Reply(h.ERROR, None, "nope"))
+        self.run_for(60, telemetry=True)
+        self.assertEqual(self.m.count("faults_reset"), 1)
+        self.assertEqual(self.wd.faults, 3)
+        self.assertTrue(any("not cleared" in e["msg"] for e in self.shared.events))
+
+    def test_nothing_is_cleared_without_a_request(self):
+        self.make(STATIC_OK)
+        self.run_for(3600, telemetry=True)
+        self.assertEqual(self.m.count("faults_reset"), 0)
+
+
+class TestScreenMenus(unittest.TestCase):
+    ST = {"telemetry": {"fields": {"m": "40", "M": "26"}}, "watchdog": {"module_faults": 3}}
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "helper.json")
+        h.Config.update(self.path, target_amps=26)
+        self.ui = h._Ui(self.dir, "turbo")
+        self.ui.st, self.ui.age = self.ST, 1
+
+    def keys(self, *names):
+        for k in names:
+            self.ui.key(k)
+
+    def cfg(self):
+        return h.Config(self.path).get()
+
+    def text(self):
+        cv = h._Canvas(80, 32, " ", 37, 40)
+        self.ui.draw(cv, h._ASC)
+        return cv.render(False)
+
+    def test_f10_highlights_the_bar_and_enter_opens_the_menu(self):
+        self.assertIn("=  Charger  Theme", self.text())
+        for key in ("f10", "f9", "m"):                       # F10 may not reach us in every terminal
+            self.keys(key)
+            self.assertTrue(self.ui.active, key)
+            self.assertNotIn("Set current limit...", self.text())
+            self.keys("enter")
+            self.assertIn("Set current limit...  F2", self.text())
+            self.assertIn("Change the current limit", self.text())     # the hint on the status line
+            self.keys("right")
+            self.assertIn("* turbo", self.text())            # the current theme is marked
+            self.keys("esc")
+            self.assertFalse(self.ui.active, key)
+
+    def test_alt_letters_open_their_menus(self):
+        self.keys("alt+t")
+        self.assertIn("commander", self.text())
+        self.keys("alt+c")
+        self.assertIn("Clear fault log...", self.text())
+        self.keys("left")
+        self.assertIn("About OpenJuice...", self.text())
+        self.assertIn("Alt-X", self.text())
+
+    def test_letters_in_an_open_menu_mean_that_menu_only(self):
+        self.keys("alt+t", "l")                              # "light", not the limit box
+        self.assertEqual(self.ui.theme, "light")
+        self.assertIsNone(self.ui.dialog)
+        self.keys("alt+t", "f")                              # no theme has that letter: nothing happens
+        self.assertIsNone(self.ui.dialog)
+        self.assertTrue(self.ui.active)
+        self.keys("esc", "alt+c", "f")                       # Clear fault log...
+        self.assertEqual(self.ui.dialog["title"], "Clear fault log")
+
+    def test_home_end_and_wrapping_skip_the_separator(self):
+        self.keys("f10", "left", "enter")                    # the system menu: About, rule, Exit
+        self.keys("down")
+        self.assertEqual(self.ui.menus[0][2][self.ui.item][3], "quit")
+        self.keys("down")
+        self.assertEqual(self.ui.item, 0)
+        self.keys("end")
+        self.assertEqual(self.ui.menus[0][2][self.ui.item][3], "quit")
+        self.keys("home")
+        self.assertEqual(self.ui.item, 0)
+
+    def test_limit_changes_only_after_yes(self):
+        self.keys("f10", "enter", "enter")                   # first item: Set current limit...
+        self.assertEqual(self.ui.dialog["kind"], "input")
+        self.keys("2", "0", "enter")
+        self.assertIn("Set the charger's current limit to 20 A?", self.text())
+        self.assertEqual(self.cfg()["target_amps"], 26)      # nothing written before the answer
+        self.keys("y")
+        self.assertEqual(self.cfg()["target_amps"], 20)
+        self.assertIn("20 A", self.text())                   # the result is on the status line
+
+    def test_every_way_of_not_saying_yes_changes_nothing(self):
+        for seq in (("l", "esc"), ("f2", "2", "0", "tab", "enter"), ("l", "2", "0", "c"),
+                    ("l", "2", "0", "enter", "n"), ("l", "2", "0", "enter", "esc"),
+                    ("l", "2", "0", "enter", "enter"), ("l", "2", "0", "enter", " "),
+                    ("l", "2", "0", "o", "tab", "tab", "enter"),
+                    ("l", "2", "0", "enter", "shift+tab", "tab", " "),
+                    ("l", "4", "1", "enter", "esc"), ("l", "5", "enter", "esc"),
+                    ("l", "backspace", "enter", "esc"),
+                    ("f", "enter"), ("f", " "), ("f", "esc"), ("f8", "n"),
+                    ("alt+c", "down", "enter", "enter")):
+            self.keys(*seq)
+            self.assertEqual(self.cfg()["target_amps"], 26, seq)
+            self.assertNotIn("clear_faults", self.cfg(), seq)
+            self.assertIsNone(self.ui.dialog, seq)
+        self.keys("l", "2", "0", "enter")
+        self.ui.cancel()                                     # the close box
+        self.assertEqual(self.cfg()["target_amps"], 26)
+        self.assertIsNone(self.ui.dialog)
+
+    def test_out_of_range_keeps_the_box_open_with_a_reason(self):
+        self.keys("l", "4", "1", "enter")
+        self.assertEqual(self.ui.dialog["kind"], "input")
+        self.assertIn("Enter 6 to 40.", self.text())
+
+    def test_arrows_step_the_limit_and_space_presses_the_focused_button(self):
+        self.keys("l", "up", "up", "enter", "left", " ")     # 28, then move to Yes and press it
+        self.assertEqual(self.cfg()["target_amps"], 28)
+
+    def test_fault_clear_is_requested_only_after_yes(self):
+        self.keys("f")
+        self.assertIn("3 of 8", self.text())
+        self.assertIn("permanently", self.text())
+        self.keys("n")
+        self.assertNotIn("clear_faults", self.cfg())
+        self.keys("f10", "enter", "down", "enter", "y")
+        self.assertIn("clear_faults", self.cfg())
+
+    def test_nothing_is_sent_when_the_helper_is_down(self):
+        self.ui.age = 999
+        self.keys("f")
+        self.assertIn("not running", self.text())
+        self.keys("y", "enter")
+        self.assertNotIn("clear_faults", self.cfg())
+        self.assertIsNone(self.ui.dialog)
+
+    def test_theme_keys_and_quit(self):
+        self.keys("alt+t", "down", "enter")
+        self.assertEqual(self.ui.theme, "commander")
+        self.assertEqual(h.load_theme(self.dir), "commander")
+        self.keys("t", "f5")
+        self.assertEqual(self.ui.theme, "midnight")
+        self.keys("alt+x")
+        self.assertTrue(self.ui.quit)
+
+    def test_every_theme_draws_every_state(self):
+        for theme in h.THEME_ORDER:
+            for seq in ((), ("f10",), ("alt+t",), ("f10", "left", "enter"), ("l",), ("l", "2", "enter"),
+                        ("f",), ("f1",)):
+                ui = h._Ui(self.dir, theme)
+                ui.st, ui.age = self.ST, 1
+                for k in seq:
+                    ui.key(k)
+                for g in (h._UNI, h._ASC):
+                    cv = h._Canvas(80, 30, " ", 37, 40)
+                    ui.draw(cv, g)
+                    for row in cv.cells:
+                        for ch, fg, bg in row:
+                            self.assertTrue(30 <= fg <= 97 and 40 <= bg <= 107, (theme, seq, ch, fg, bg))
+
+    def test_the_default_button_is_marked_in_each_style(self):
+        for theme, mark in (("commander", "[ Yes ]  { No }"), ("mono", "< Yes >  < No >"), ("turbo", "Yes")):
+            ui = h._Ui(self.dir, theme)
+            ui.st, ui.age = self.ST, 1
+            ui.key("f")
+            cv = h._Canvas(80, 30, " ", 37, 40)
+            ui.draw(cv, h._ASC)
+            self.assertIn(mark, cv.render(False), theme)
+            self.assertEqual(ui.dialog["focus"], 1, theme)   # No
+
+
+class TestKeyNames(unittest.TestCase):
+    ALT, CTRL, SHIFT = 0x2, 0x8, 0x10
+
+    def test_alt_letters_are_not_plain_letters(self):
+        self.assertEqual(h._key_name(0x54, "t", self.ALT), "alt+t")
+        self.assertEqual(h._key_name(0x43, "c", 0x1), "alt+c")              # right Alt
+        self.assertEqual(h._key_name(0x54, "t", 0), "t")
+        self.assertEqual(h._key_name(0x54, "T", self.SHIFT), "t")
+
+    def test_altgr_and_ctrl_are_left_alone(self):
+        self.assertIsNone(h._key_name(0x51, "@", self.ALT | self.CTRL))
+        self.assertIsNone(h._key_name(0x43, "\x03", self.CTRL))
+
+    def test_function_and_editing_keys(self):
+        self.assertEqual(h._key_name(0x79, "\x00", 0), "f10")
+        self.assertEqual(h._key_name(0x78, "\x00", 0), "f9")
+        self.assertEqual(h._key_name(0x26, "\x00", 0x100), "up")
+        self.assertEqual(h._key_name(0x09, "\t", self.SHIFT), "shift+tab")
+        self.assertEqual(h._key_name(0x09, "\t", 0), "tab")
+        self.assertEqual(h._key_name(0x0D, "\r", 0), "enter")
+        self.assertEqual(h._key_name(0x35, "5", 0), "5")
+        self.assertIsNone(h._key_name(0x10, "\x00", self.SHIFT))            # Shift on its own
 
 
 class TestWatchdog(WatchdogCase):
@@ -423,6 +650,26 @@ class TestSockets(unittest.TestCase):
         notes = [e["msg"] for e in self.shared.events if "charge complete" in e["msg"]]
         self.assertEqual(len(notes), 1)
         self.assertIn("4.2 kWh delivered", notes[0])
+
+    def test_listener_warns_when_a_charge_ends_with_no_energy_counters(self):
+        port = free_udp_port()
+        tlog = h.TelemetryLog(os.path.join(tempfile.mkdtemp(), "telemetry.log"))
+        watch = h.ChargeWatch()
+        watch.CONFIRM = 0.2
+        threading.Thread(target=h.listener_loop,
+                         args=(self.shared, lambda: self.cfg, h.LimitKeeper(self.shared.note), tlog, self.stop),
+                         kwargs={"port": port, "watch": watch}, daemon=True).start()
+        time.sleep(0.3)
+        charger = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(charger.close)
+        frame = "0817081001070449032218248303:v07,s0001,u1,V2400,S%s,T15,M26,m40!XYZ:"      # no L, no E
+        for state in ("2", "1", "1", "1"):
+            charger.sendto((frame % state).encode(), ("127.0.0.1", port))
+            time.sleep(0.25)
+        self.assertIsNone(self.shared.last_complete["wh"])
+        msgs = [e["msg"] for e in self.shared.events]
+        self.assertTrue(any("no energy counters" in m for m in msgs))
+        self.assertFalse(any("charge complete" in m for m in msgs))
 
 
 class TestConfig(unittest.TestCase):

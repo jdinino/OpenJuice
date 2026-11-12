@@ -23,7 +23,7 @@ Usage:
   python charge_notifier.py replay telemetry.log  # scan a log, print detected completions
 
 Options (watch):
-  --sound PATH      wav to play           (default C:\\Windows\\Media\\tada.wav)
+  --sound PATH      wav to play           (default Windows' Print complete sound)
   --repeat N        play it N times        (default 1)
   --poll SEC        status.json poll gap   (default 5)
   --confirm SEC     how long S1 must hold  (default 30)
@@ -43,7 +43,7 @@ import os
 import sys
 import time
 
-DEFAULT_SOUND = r"C:\Windows\Media\tada.wav"
+DEFAULT_SOUND = r"C:\Windows\Media\Windows Print complete.wav"   # as the desktop monitor
 STATE_NAMES = {"0": "unplugged", "1": "plugged in", "2": "charging", "5": "error"}
 
 

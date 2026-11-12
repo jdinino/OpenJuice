@@ -103,6 +103,10 @@ namespace OpenJuice
     {
         public const char H = '\u2550', V = '\u2551', TL = '\u2554', TR = '\u2557', BL = '\u255a', BR = '\u255d';
         public const char FULL = '\u2588', EMPTY = '\u2591', DESK = '\u2591', SEP = '\u2502';
+        // Single-line corners and rule for pull-down menus; SEP is their vertical. DOT marks a choice.
+        public const char SH = '\u2500', STL = '\u250c', STR = '\u2510', SBL = '\u2514', SBR = '\u2518', DOT = '\u2022';
+        // A dialog's close box, and the half blocks of a button's shadow.
+        public const char BOX = '\u25a0', LOWER = '\u2584', UPPER = '\u2580';
         public readonly int W, Hgt;
         public readonly Cell[,] C;
 
@@ -135,22 +139,35 @@ namespace OpenJuice
             for (int yy = y; yy < y + h; yy++) Put(x, yy, s, fg, bg);
         }
 
+        // A drop shadow, as Turbo Vision casts it: the cells keep their characters and only change
+        // colour. Dark grey on black would vanish on a black cell, so that one is reversed.
         public void Shade(int x, int y, int w, int h, int fg, int bg)
         {
             for (int yy = Math.Max(0, y); yy < Math.Min(Hgt, y + h); yy++)
-                for (int xx = Math.Max(0, x); xx < Math.Min(W, x + w); xx++) { C[yy, xx].Ch = ' '; C[yy, xx].Fg = fg; C[yy, xx].Bg = bg; }
+                for (int xx = Math.Max(0, x); xx < Math.Min(W, x + w); xx++)
+                {
+                    bool black = fg == 90 && bg == 40 && C[yy, xx].Bg == 40;
+                    C[yy, xx].Fg = black ? 30 : fg;
+                    C[yy, xx].Bg = black ? 100 : bg;
+                }
         }
 
-        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow)
+        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow) { Window(x, y, w, h, title, col, shadow, null, false); }
+
+        // A framed box with a centred title and a shadow. `frame` colours the border and title apart
+        // from the body; `single` draws the one-line frame of a window that is not the main one.
+        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow, int[] frame, bool single)
         {
+            int[] f = frame ?? col;
             Shade(x + 2, y + 1, w, h, shadow[0], shadow[1]);
             Fill(x, y, w, h, ' ', col[0], col[1]);
-            string bar = new string(H, Math.Max(0, w - 2));
-            Put(x, y, TL + bar + TR);
-            Put(x, y + h - 1, BL + bar + BR);
-            for (int yy = y + 1; yy < y + h - 1; yy++) { Put(x, yy, V.ToString()); Put(x + w - 1, yy, V.ToString()); }
+            string bar = new string(single ? SH : H, Math.Max(0, w - 2));
+            string side = (single ? SEP : V).ToString();
+            Put(x, y, (single ? STL : TL) + bar + (single ? STR : TR), f[0], f[1]);
+            Put(x, y + h - 1, (single ? SBL : BL) + bar + (single ? SBR : BR), f[0], f[1]);
+            for (int yy = y + 1; yy < y + h - 1; yy++) { Put(x, yy, side, f[0], f[1]); Put(x + w - 1, yy, side, f[0], f[1]); }
             string t = " " + title + " ";
-            Put(x + (w - t.Length) / 2, y, t);
+            Put(x + (w - t.Length) / 2, y, t, f[0], f[1]);
         }
     }
 
@@ -672,7 +689,7 @@ namespace OpenJuice
             }
 
             int ww = (W - 10) / 2;                               // leaves desktop around every shadow
-            int lx = 2, rx = 2 + ww + 4, ty = 2, th = 9;
+            int lx = 2, rx = 2 + ww + 4, ty = 2, th = 10;
             int fw = 2 * ww + 4, cy = 13, chh = 9, by = 24, bh = H - 26;
             int iw = ww - 4, bw = iw - 17;
 
@@ -692,24 +709,33 @@ namespace OpenJuice
                 Chip(cv, lx, ty, 0, "State", StateName(sc).ToUpperInvariant(), scol, J.Has(t, "age_s") ? " " + J.I(t, "age_s", 0) + "s ago" : "", iw);
                 double a = J.I(f, "A", 0) / 10.0, v = J.I(f, "V", 0) / 10.0;
                 int temp = J.I(f, "T", 0);
-                Bar(cv, T, lx, ty, 1, "Current", a, circ, a.ToString("0.0", Inv) + " A", cap, a > cap + 0.05, bw);
-                Bar(cv, T, lx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, (a * v / 1000.0).ToString("0.00", Inv) + " kW", -1, false, bw);
+                // Three bands, the same as the Health window beside it, so the two read across: status
+                // chips, then every gauge, then plain figures.
+                // The limit is the one the charger reports, flagged while it differs from the helper's.
+                object lim0 = J.Get(st, "limit");
+                if (!J.Has(f, "M")) Text(cv, lx, ty, 1, "Limit", "-", iw);
+                else if (J.Has(lim0, "target") && J.I(lim0, "target", cap) != cap)
+                    Chip(cv, lx, ty, 1, "Limit", cap + " A", T.Warn, " target " + J.I(lim0, "target", cap) + " A", iw);
+                else Chip(cv, lx, ty, 1, "Limit", cap + " A", T.Info, "", iw);
+                Bar(cv, T, lx, ty, 2, "Current", a, circ, a.ToString("0.0", Inv) + " A", cap, a > cap + 0.05, bw);
+                Bar(cv, T, lx, ty, 4, "Power", a * v / 1000.0, circ * 0.24, (a * v / 1000.0).ToString("0.00", Inv) + " kW", -1, false, bw);
                 Bar(cv, T, lx, ty, 3, "Volts", v - 200, 60, v.ToString("0.0", Inv) + " V", -1, !(v >= 210 && v <= 255), bw);
-                Bar(cv, T, lx, ty, 4, "Temp", temp, 80, temp + " C", -1, temp > 60, bw);
+                Bar(cv, T, lx, ty, 5, "Temp", temp, 80, temp + " C", -1, temp > 60, bw);
                 if (sc == "2" && J.Has(f, "E"))                 // charging: this session so far
-                    Text(cv, lx, ty, 5, "Session", (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh", iw);
+                    Text(cv, lx, ty, 6, "Session", (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh", iw);
                 else if (done != null)                          // otherwise the last finished charge: when, how much
                 {
                     string when = done.Substring(0, 10) == now.ToString("yyyy-MM-dd", Inv) ? done.Substring(11, 5) : done.Substring(5, 11).Replace('T', ' ');
-                    Chip(cv, lx, ty, 5, "Finished", when, T.Ok, J.Has(lastDone, "wh") ? " " + (J.I(lastDone, "wh", 0) / 1000.0).ToString("0.0", Inv) + " kWh" : "", iw);
+                    Chip(cv, lx, ty, 6, "Finished", when, T.Ok, J.Has(lastDone, "wh") ? " " + (J.I(lastDone, "wh", 0) / 1000.0).ToString("0.0", Inv) + " kWh" : "", iw);
                 }
-                else Text(cv, lx, ty, 5, "Finished", "no charge seen yet", iw);
-                Text(cv, lx, ty, 6, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
+                else Text(cv, lx, ty, 6, "Finished", "no charge seen yet", iw);
+                Text(cv, lx, ty, 7, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
             }
             else cv.Put(lx + 2, ty + 1, Clip("no telemetry since the helper started", iw));
 
             // --- Health: helper, link and the counters that have limits
-            cv.Window(rx, ty, ww, th, "Health", T.Win, T.Shadow);
+            bool single = Style.Of(T).Single;                    // every window but the main one
+            cv.Window(rx, ty, ww, th, "Health", T.Win, T.Shadow, null, single);
             object w = J.Get(st, "watchdog");
             string up = "?";
             DateTime started;
@@ -741,7 +767,7 @@ namespace OpenJuice
 
             // --- Chart: current per minute
             int nb = iw - 3, bottom = cy + 6;
-            cv.Window(lx, cy, ww, chh, "Current per minute, A", T.Win, T.Shadow);
+            cv.Window(lx, cy, ww, chh, "Current per minute, A", T.Win, T.Shadow, null, single);
             if (hist != null)
             {
                 cv.Put(lx + 2, cy + 1, circ.ToString().PadLeft(2));
@@ -766,7 +792,7 @@ namespace OpenJuice
             else cv.Put(lx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
 
             // --- Chart: energy per day
-            cv.Window(rx, cy, ww, chh, "Energy per day, kWh", T.Win, T.Shadow);
+            cv.Window(rx, cy, ww, chh, "Energy per day, kWh", T.Win, T.Shadow, null, single);
             if (hist != null && hist.DayKwh.Length > 0)
             {
                 int n0 = hist.DayKwh.Length, first = Math.Max(0, n0 - (chh - 2));
@@ -792,7 +818,7 @@ namespace OpenJuice
             else cv.Put(rx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
 
             // --- Event log
-            cv.Window(lx, by, fw, bh, "Event log", T.Log, T.Shadow);
+            cv.Window(lx, by, fw, bh, "Event log", T.Log, T.Shadow, null, single);
             IList evs = J.Get(st, "events") as IList;
             int n = evs == null ? 0 : Math.Min(evs.Count, bh - 2);
             for (int i = 0; i < n; i++)
@@ -908,42 +934,500 @@ namespace OpenJuice
         }
     }
 
-    // Fires once per real charge: S2 seen, then S1 held 30 s, with >= 0.1 kWh delivered.
-    // Same rules as charge_notifier.py's CompletionDetector.
-    class CompletionDetector
+    // Colours and drawing choices for menus and dialogs, derived from a theme. juicebox_helper.py
+    // has the same table (_style) and explains the three period styles and their sources:
+    //   tv    Borland Turbo Vision     nc    Norton Commander / FAR     mono  one-hue screens
+    class Style
     {
-        const double Confirm = 30, Gap = 60, MinWh = 100;
-        bool armed, fired;
-        DateTime? s1Since, lastObs;
-        int? armL, lastL;
+        public string Family, Buttons, Status;
+        public bool CloseBox, Single;
+        public int[] BarHot, Menu, MenuHot, Sel, SelHot, Dlg, Frame, Icon, Err, ErrFocus, ErrHot, Btn, BtnHot, Focus, FocusHot, Input, InputSel;
 
-        public double? Observe(DateTime when, string S, int? L)
+        static int[] P(int fg, int bg) { return new int[] { fg, bg }; }
+
+        public static Style Of(Theme T)
         {
-            double? result = null;
-            if (S == null) return null;
-            if (lastObs.HasValue && (when - lastObs.Value).TotalSeconds > Gap) { armed = false; s1Since = null; fired = false; armL = null; }
-            lastObs = when;
-            if (S == "2")
+            string fam = T.Name == "commander" ? "nc" : (T.Name == "phosphor" || T.Name == "amber" || T.Name == "mono") ? "mono" : "tv";
+            int[] bar = T.Bar, bright = T.Main;
+            if (fam == "tv")
             {
-                if (!armed) armL = L.HasValue ? L : lastL;
-                armed = true; s1Since = null; fired = false;
+                int[] hot = P(T.Key, bar[1]);
+                return new Style { Family = fam, Buttons = "tv", Status = "tv", CloseBox = true, Single = true,
+                    BarHot = hot, Menu = bar, MenuHot = hot, Sel = P(30, 42), SelHot = P(31, 42),
+                    Dlg = P(30, 47), Frame = P(97, 47), Icon = P(92, 47),
+                    Btn = P(30, 42), BtnHot = P(93, 42), Focus = P(97, 42), FocusHot = P(93, 42),
+                    Input = P(97, 44), InputSel = P(97, 42) };
             }
-            else if (S == "1")
+            if (fam == "nc")
+                return new Style { Family = fam, Buttons = "far", Status = "fn", CloseBox = false, Single = false,
+                    BarHot = P(93, bar[1]), Menu = P(97, 46), MenuHot = P(93, 46), Sel = P(97, 40), SelHot = P(93, 40),
+                    Dlg = P(30, 47), Frame = P(30, 47), Err = P(97, 41), ErrFocus = P(30, 47), ErrHot = P(93, 41),
+                    Btn = P(30, 47), BtnHot = P(93, 47), Focus = P(30, 46), FocusHot = P(93, 46),
+                    Input = P(30, 46), InputSel = P(97, 40) };
+            int[] lit = P(30, bar[1] + 60);                 // one hue: a brighter cell stands in for colour
+            return new Style { Family = fam, Buttons = "cua", Status = "kv", CloseBox = false, Single = false,
+                BarHot = lit, Menu = bar, MenuHot = lit, Sel = bright, SelHot = bar,
+                Dlg = T.Win, Frame = P(bright[0], T.Win[1]),
+                Btn = T.Win, BtnHot = P(bright[0], T.Win[1]), Focus = bar, FocusHot = lit,
+                Input = bar, InputSel = bright };
+        }
+    }
+
+    // The menu bar, pull-down menus and dialogs. juicebox_helper.py carries the same ones for the
+    // terminal screen (class _Ui); change both together. Keys behave the same in every theme; a
+    // theme changes only how things are drawn.
+    //
+    // The monitor never talks to the charger. A control writes one value into helper.json, which the
+    // running helper re-reads: target_amps is the limit it keeps, clear_faults is a one-shot request
+    // it handles once and removes. Each asks Yes or No first, with No as the default.
+    class Ui
+    {
+        class Item { public string Label, Key = "", Action, Hint; public int Hot = -1; }
+
+        class Menu { public string Title; public int Hot; public List<Item> Items = new List<Item>(); }
+
+        class Dialog
+        {
+            public string Kind, Title, Value = "", Error = "", No, Do, Tone = "";
+            public List<string> Lines = new List<string>();
+            public int Focus, Default, Top, Now, Amps;
+            public bool Fresh;
+        }
+
+        const int MinAmps = 6, MaxAmps = 40;
+        static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+        readonly string dataDir;
+        readonly List<Menu> menus = new List<Menu>();
+        int menu = -1, item;
+        bool opened;
+        Dialog dlg;
+        string said;
+        DateTime saidUntil;
+        // Where the last Draw put things, for mouse clicks.
+        readonly List<Rectangle> titleAt = new List<Rectangle>(), itemAt = new List<Rectangle>(), buttonAt = new List<Rectangle>();
+        Rectangle closeAt;
+
+        public Dictionary<string, object> St;
+        public double Age = 9999;
+        public int ThemeIx;
+        public string HelperVersion = "1.0";
+        public Action<int> ThemeChosen;
+
+        public Ui(string dataDir)
+        {
+            this.dataDir = dataDir;
+            Menu sys = new Menu { Title = "≡", Hot = -1 };
+            sys.Items.Add(new Item { Label = "About OpenJuice...", Hot = 0, Key = "F1", Action = "about", Hint = "What this screen is" });
+            Menu charger = new Menu { Title = "Charger", Hot = 0 };
+            charger.Items.Add(new Item { Label = "Set current limit...", Hot = 12, Key = "F2", Action = "limit", Hint = "Change the current limit" });
+            charger.Items.Add(new Item { Label = "Clear fault log...", Hot = 6, Key = "F8", Action = "faults", Hint = "Clear the module's fault log" });
+            Menu themes = new Menu { Title = "Theme", Hot = 0 };
+            string used = "";
+            foreach (Theme t in Theme.All)
             {
-                if (armed && !fired)
+                int hot = 0;
+                while (used.IndexOf(t.Name[hot]) >= 0) hot++;
+                used += t.Name[hot];
+                themes.Items.Add(new Item { Label = t.Name, Hot = hot, Action = "theme:" + t.Name, Hint = "Switch to the " + t.Name + " theme" });
+            }
+            menus.Add(sys); menus.Add(charger); menus.Add(themes);
+        }
+
+        public bool Active { get { return menu >= 0 || dlg != null; } }
+
+        void Say(string text) { said = text; saidUntil = DateTime.Now.AddSeconds(4); }
+
+        void Close() { menu = -1; opened = false; }
+
+        void Open(int index, bool show)
+        {
+            menu = (index + menus.Count) % menus.Count;
+            opened = show;
+            item = menus[menu].Title == "Theme" ? Math.Min(ThemeIx, menus[menu].Items.Count - 1) : 0;
+        }
+
+        int TitleFor(string letter)
+        {
+            for (int i = 0; i < menus.Count; i++)
+                if (menus[i].Hot >= 0 && menus[i].Title.Substring(menus[i].Hot, 1).ToLowerInvariant() == letter) return i;
+            return -1;
+        }
+
+        // ---- keys: names as in the terminal screen ----
+        public bool Key(string k)
+        {
+            if (dlg != null) return DialogKey(k);
+            if (menu >= 0) return MenuKey(k);
+            if (k == "f10" || k == "f9" || k == "m") Open(1, false);       // highlights the first named menu; Enter opens it
+            else if (k.StartsWith("alt+") && TitleFor(k.Substring(4)) >= 0) Open(TitleFor(k.Substring(4)), true);
+            else if (k == "t" || k == "f5") Run("theme:" + Theme.All[(ThemeIx + 1) % Theme.All.Length].Name);
+            else if (k == "f1") Run("about");
+            else if (k == "f2" || k == "l") Run("limit");
+            else if (k == "f8" || k == "f") Run("faults");
+            else return false;
+            return true;
+        }
+
+        // A menu is modal: every key is used here, and letters mean this menu's own items.
+        bool MenuKey(string k)
+        {
+            List<Item> items = menus[menu].Items;
+            if (k == "esc" || k == "f10" || k == "f9") Close();
+            else if (k == "left" || k == "right") Open(menu + (k == "right" ? 1 : -1), opened);
+            else if (k.StartsWith("alt+") && TitleFor(k.Substring(4)) >= 0) Open(TitleFor(k.Substring(4)), true);
+            else if (!opened)
+            {
+                if (k == "enter" || k == "down" || k == "up") opened = true;
+                else if (k.Length == 1 && TitleFor(k) >= 0) Open(TitleFor(k), true);
+            }
+            else if (k == "up" || k == "down") item = (item + (k == "down" ? 1 : items.Count - 1)) % items.Count;
+            else if (k == "home") item = 0;
+            else if (k == "end") item = items.Count - 1;
+            else if (k == "enter") Run(items[item].Action);
+            else if (k.Length == 1)
+                foreach (Item it in items)
+                    if (it.Hot >= 0 && it.Label.Substring(it.Hot, 1).ToLowerInvariant() == k) { Run(it.Action); break; }
+            return true;
+        }
+
+        int Target()
+        {
+            try
+            {
+                object cfg = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(dataDir, "helper.json")));
+                return J.I(cfg, "target_amps", 26);
+            }
+            catch { return 26; }
+        }
+
+        void Info(string title, string tone, params string[] lines)
+        {
+            dlg = new Dialog { Kind = "info", Title = title, Tone = tone };
+            dlg.Lines.AddRange(lines);
+        }
+
+        public void Run(string action)
+        {
+            Close();
+            if (action.StartsWith("theme:"))
+            {
+                if (ThemeChosen != null) ThemeChosen(Theme.IndexOf(action.Substring(6)));
+                return;
+            }
+            if (action == "about")
+            {
+                Info("About", "", "OpenJuice status screen", "JuiceBox Gen 1 under local control", "Helper " + HelperVersion);
+                return;
+            }
+            if (St == null || Age >= 30)
+            {
+                Info("Helper not running", "err", "The helper is not running,", "so nothing was sent.");
+                return;
+            }
+            if (action == "limit")
+            {
+                object f = J.Get(J.Get(St, "telemetry"), "fields");
+                int top = Math.Max(MinAmps, Math.Min(MaxAmps, J.I(f, "m", MaxAmps))), now = Target();
+                dlg = new Dialog { Kind = "input", Title = "Set current limit", Top = top, Now = now, Value = now.ToString(Inv), Fresh = true };
+                dlg.Lines.Add("Limit in amps, " + MinAmps + " to " + top + ":");
+            }
+            else if (action == "faults")
+            {
+                object w = J.Get(St, "watchdog");
+                string count = J.Has(w, "module_faults") ? J.I(w, "module_faults", 0) + " of 8" : "count unknown";
+                dlg = new Dialog { Kind = "confirm", Title = "Clear fault log", Focus = 1, Default = 1, Do = "clear", Tone = "err", No = "Fault log left as it is." };
+                dlg.Lines.Add("Clear the charger's fault log (" + count + ")?");
+                dlg.Lines.Add("It is copied to helper.log first, then");
+                dlg.Lines.Add("permanently cleared on the charger.");
+            }
+        }
+
+        bool DialogKey(string k)
+        {
+            Dialog d = dlg;
+            if (d.Kind == "info")
+            {
+                if (k == "enter" || k == "esc" || k == " " || k == "o") dlg = null;
+                return true;
+            }
+            int v;
+            if (k == "left" || k == "right" || k == "tab" || k == "shift+tab") d.Focus = 1 - d.Focus;
+            else if (k == "esc") Answer(false);
+            else if (k == "enter" || k == " ") Answer(d.Focus == 0);
+            else if (d.Kind == "confirm")
+            {
+                if (k == "y" || k == "n") Answer(k == "y");
+            }
+            else if (k == "o" || k == "c") Answer(k == "o");
+            else if (k == "backspace") { d.Value = d.Fresh || d.Value.Length == 0 ? "" : d.Value.Substring(0, d.Value.Length - 1); d.Fresh = false; }
+            else if (k == "up" || k == "down")
+            {
+                if (!int.TryParse(d.Value, out v)) v = d.Now;
+                v += k == "up" ? 1 : -1;
+                d.Value = Math.Max(MinAmps, Math.Min(d.Top, v)).ToString(Inv);
+                d.Fresh = false;
+            }
+            else if (k.Length == 1 && k[0] >= '0' && k[0] <= '9')
+            {
+                d.Value = d.Fresh ? k : (d.Value + k);
+                if (d.Value.Length > 2) d.Value = d.Value.Substring(0, 2);
+                d.Fresh = false;
+            }
+            return true;
+        }
+
+        // The close box, or anything else that dismisses a dialog without an answer.
+        void Cancel()
+        {
+            if (dlg == null) return;
+            if (dlg.Kind == "info") dlg = null; else Answer(false);
+        }
+
+        void Answer(bool yes)
+        {
+            Dialog d = dlg;
+            dlg = null;
+            if (d.Kind == "input")
+            {
+                if (!yes) { Say("Limit left at " + d.Now + " A."); return; }
+                int amps;
+                if (!int.TryParse(d.Value, out amps)) amps = 0;
+                if (amps < MinAmps || amps > d.Top)
                 {
-                    if (!s1Since.HasValue) s1Since = when;
-                    else if ((when - s1Since.Value).TotalSeconds >= Confirm)
-                    {
-                        fired = true; armed = false;
-                        double wh = (lastL.HasValue && armL.HasValue) ? lastL.Value - armL.Value : -1;
-                        if (wh < 0 || wh >= MinWh) result = Math.Max(0, wh);
-                    }
+                    d.Error = "Enter " + MinAmps + " to " + d.Top + ".";
+                    d.Fresh = true;
+                    dlg = d;
+                    return;
+                }
+                dlg = new Dialog { Kind = "confirm", Title = "Set current limit", Focus = 1, Default = 1, Do = "target", Amps = amps, No = "Limit left at " + d.Now + " A." };
+                dlg.Lines.Add("Set the charger's current limit to " + amps + " A?");
+                dlg.Lines.Add("It is " + d.Now + " A now.");
+                return;
+            }
+            if (!yes) { Say(d.No); return; }
+            string err = d.Do == "target"
+                ? Write("target_amps", d.Amps)
+                : Write("clear_faults", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", Inv));
+            if (err != null) Say("Could not write helper.json: " + err);
+            else Say(d.Do == "target" ? "Asked the helper for a " + d.Amps + " A limit." : "Asked the helper to clear the fault log.");
+        }
+
+        // Returns null, or why the setting could not be written.
+        string Write(string key, object value)
+        {
+            string path = Path.Combine(dataDir, "helper.json"), tmp = path + ".monitor.tmp";
+            try
+            {
+                Dictionary<string, object> cfg = null;
+                if (File.Exists(path))
+                {
+                    // An unreadable file is left alone: writing a fresh one would drop its other settings.
+                    cfg = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(path)) as Dictionary<string, object>;
+                    if (cfg == null) throw new InvalidDataException("it is not a settings object");
+                }
+                else cfg = new Dictionary<string, object>();
+                cfg[key] = value;
+                File.WriteAllText(tmp, new JavaScriptSerializer().Serialize(cfg), new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+                return null;
+            }
+            catch (Exception e) { return e.Message; }
+        }
+
+        // ---- mouse: a click on a cell of the last drawing ----
+        static int Hit(List<Rectangle> at, int cx, int cy)
+        {
+            for (int i = 0; i < at.Count; i++) if (at[i].Contains(cx, cy)) return i;
+            return -1;
+        }
+
+        public bool Click(int cx, int cy)
+        {
+            int i;
+            if (dlg != null)
+            {
+                if (closeAt.Contains(cx, cy)) { Cancel(); return true; }
+                i = Hit(buttonAt, cx, cy);
+                if (i < 0) return false;                      // a dialog is modal
+                if (dlg.Kind == "info") dlg = null; else Answer(i == 0);
+                return true;
+            }
+            i = Hit(titleAt, cx, cy);
+            if (i >= 0) { if (menu == i && opened) Close(); else Open(i, true); return true; }
+            if (menu < 0) return false;
+            i = opened ? Hit(itemAt, cx, cy) : -1;
+            if (i >= 0) Run(menus[menu].Items[i].Action); else Close();
+            return true;
+        }
+
+        // ---- drawing ----
+        static void Put(Canvas cv, int x, int y, string s, int[] c) { cv.Put(x, y, s, c[0], c[1]); }
+
+        void StatusLine(Canvas cv, Style S, int[] bar)
+        {
+            int W = cv.W, y = cv.Hgt - 1;
+            cv.Fill(0, y, W, 1, ' ', bar[0], bar[1]);
+            string note = "";                                   // the highlighted menu item's hint
+            if (menu >= 0 && opened) note = menus[menu].Items[item].Hint;
+            else if (said != null && DateTime.Now < saidUntil)
+            {
+                cv.Put(1, y, said.Length > W - 2 ? said.Substring(0, W - 2) : said);   // a result takes the whole line
+                return;
+            }
+            if (S.Status == "fn")                               // ten numbered cells; unbound keys stay blank
+            {
+                if (note.Length > 0) { cv.Put(1, y, note); return; }
+                string[] labels = { "About", "Limit", "", "", "Theme", "", "", "Faults", "Menu", "Menu" };
+                int cell = W / 10;
+                for (int i = 0; i < 10; i++)
+                {
+                    cv.Put(i * cell, y, (i + 1).ToString(Inv).PadLeft(2), 37, 40);
+                    cv.Put(i * cell + 2, y, labels[i].PadRight(cell - 2).Substring(0, cell - 2), 30, 46);
+                }
+                cv.Fill(10 * cell, y, W - 10 * cell, 1, ' ', 30, 46);
+                return;
+            }
+            string[][] keys = { new string[] { "F10", "Menu" }, new string[] { "L", "Limit" }, new string[] { "F", "Faults" }, new string[] { "T", "Theme" } };
+            int x = 1;
+            foreach (string[] k in keys)
+            {
+                if (S.Status == "kv") cv.Put(x, y, k[0].Replace("-", "+") + "=" + k[1]);       // Key=Action
+                else { Put(cv, x, y, k[0], S.BarHot); cv.Put(x + k[0].Length + 1, y, k[1]); }
+                x += k[0].Length + k[1].Length + 3;
+            }
+            if (note.Length > 0)
+            {
+                int room = Math.Max(0, W - x - 3);
+                cv.Put(x, y, Canvas.SEP + " " + (note.Length > room ? note.Substring(0, room) : note));
+            }
+        }
+
+        public void Draw(Canvas cv, Theme T)
+        {
+            Style S = Style.Of(T);
+            int[] bar = T.Bar;
+            int W = cv.W, H = cv.Hgt;
+            titleAt.Clear(); itemAt.Clear(); buttonAt.Clear(); closeAt = Rectangle.Empty;
+            cv.Fill(0, 0, Math.Max(0, W - 21), 1, ' ', bar[0], bar[1]);          // menu bar, left of the clock
+            int x = 1;
+            int[] xs = new int[menus.Count];
+            for (int i = 0; i < menus.Count; i++)
+            {
+                Menu m = menus[i];
+                xs[i] = x;
+                if (i == menu)
+                {
+                    Put(cv, x, 0, " " + m.Title + " ", S.Sel);
+                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, m.Title.Substring(m.Hot, 1), S.SelHot);
+                }
+                else
+                {
+                    cv.Put(x + 1, 0, m.Title);
+                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, m.Title.Substring(m.Hot, 1), S.BarHot);
+                }
+                titleAt.Add(new Rectangle(x, 0, m.Title.Length + 2, 1));
+                x += m.Title.Length + 2;
+            }
+            StatusLine(cv, S, bar);
+
+            if (menu >= 0 && opened)
+            {
+                List<Item> items = menus[menu].Items;
+                bool mark = menus[menu].Title == "Theme";
+                int inner = 0;
+                foreach (Item it in items) inner = Math.Max(inner, it.Label.Length + (it.Key.Length > 0 ? it.Key.Length + 2 : 0));
+                inner += 2 + (mark ? 2 : 0);
+                int mx = xs[menu] - 1, my = 1, mw = inner + 4, mh = items.Count + 2;     // a blank column outside the frame
+                string rule = new string(Canvas.SH, inner);
+                cv.Shade(mx + 2, my + 1, mw, mh, T.Shadow[0], T.Shadow[1]);
+                cv.Fill(mx, my, mw, mh, ' ', S.Menu[0], S.Menu[1]);
+                cv.Put(mx + 1, my, Canvas.STL + rule + Canvas.STR);
+                cv.Put(mx + 1, my + mh - 1, Canvas.SBL + rule + Canvas.SBR);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    Item it = items[i];
+                    int y = my + 1 + i;
+                    cv.Put(mx + 1, y, Canvas.SEP.ToString());
+                    cv.Put(mx + mw - 2, y, Canvas.SEP.ToString());
+                    string lead = mark ? (i == ThemeIx ? Canvas.DOT + " " : "  ") : "";
+                    string row = (" " + lead + it.Label).PadRight(inner);
+                    if (it.Key.Length > 0) row = row.Substring(0, inner - 1 - it.Key.Length) + it.Key + " ";
+                    bool chosen = i == item;
+                    Put(cv, mx + 2, y, row, chosen ? S.Sel : S.Menu);
+                    if (it.Hot >= 0) Put(cv, mx + 3 + lead.Length + it.Hot, y, it.Label.Substring(it.Hot, 1), chosen ? S.SelHot : S.MenuHot);
+                    itemAt.Add(new Rectangle(mx + 2, y, inner, 1));
                 }
             }
-            else { armed = false; s1Since = null; fired = false; armL = null; }
-            if (L.HasValue) lastL = L;
-            return result;
+
+            Dialog d = dlg;
+            if (d == null) return;
+            bool err = d.Tone == "err" && S.Err != null;
+            int[] body = err ? S.Err : S.Dlg, frame = err ? S.Err : S.Frame;
+            int[] btn = err ? body : S.Btn, btnhot = err ? S.ErrHot : S.BtnHot;
+            int[] focus = err ? S.ErrFocus : S.Focus, focushot = err ? S.ErrFocus : S.FocusHot;
+            string[] buttons = d.Kind == "confirm" ? new string[] { "Yes", "No" } : d.Kind == "input" ? new string[] { "OK", "Cancel" } : new string[] { "OK" };
+            bool tv = S.Buttons == "tv";
+            int dw = Math.Max(30, d.Title.Length + 4);
+            foreach (string s in d.Lines) dw = Math.Max(dw, s.Length);
+            dw += 6;
+            int dh = d.Lines.Count + (d.Kind == "input" ? 7 : 5) + (tv ? 1 : 0);
+            int dx = (W - dw) / 2, dy = Math.Max(2, (H - dh) / 2 - 2);
+            cv.Window(dx, dy, dw, dh, d.Title, body, T.Shadow, frame, false);
+            if (S.CloseBox)
+            {
+                Put(cv, dx + 2, dy, "[" + Canvas.BOX + "]", frame);
+                Put(cv, dx + 3, dy, Canvas.BOX.ToString(), S.Icon);
+                closeAt = new Rectangle(dx + 2, dy, 3, 1);
+            }
+            for (int i = 0; i < d.Lines.Count; i++) Put(cv, dx + 3, dy + 2 + i, d.Lines[i], body);
+            int by = dy + 2 + d.Lines.Count;
+            if (d.Kind == "input")
+            {
+                Put(cv, dx + 3, by, new string(' ', 6), S.Input);
+                Put(cv, dx + 4, by, d.Value, d.Fresh ? S.InputSel : S.Input);
+                if (!d.Fresh) cv.Put(dx + 4 + d.Value.Length, by, " ", S.Input[1] - 10, S.Input[0] + 10);   // a block cursor
+                Put(cv, dx + 11, by, d.Error, body);
+                by += 2;
+            }
+            else by += 1;
+            string[] shown = new string[buttons.Length];
+            int width = 2 * (buttons.Length - 1);
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                string b = buttons[i];
+                if (tv) shown[i] = new string(' ', (10 - b.Length) / 2) + b + new string(' ', 10 - b.Length - (10 - b.Length) / 2);
+                else if (S.Buttons == "far") shown[i] = (i == d.Default ? "{ " : "[ ") + b + (i == d.Default ? " }" : " ]");   // FAR marks the default with braces
+                else shown[i] = "< " + b + " >";
+                width += shown[i].Length;
+            }
+            x = dx + (dw - width) / 2;
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                string text = shown[i];
+                bool on = i == d.Focus;
+                int hot = text.IndexOf(buttons[i]);
+                Put(cv, x, by, text, on ? focus : btn);
+                Put(cv, x + hot, by, text.Substring(hot, 1), on ? focushot : btnhot);
+                if (tv)                                         // half-block shadow to the right and below
+                {
+                    cv.Put(x + text.Length, by, Canvas.LOWER.ToString(), 30, body[1]);
+                    cv.Put(x + 1, by + 1, new string(Canvas.UPPER, text.Length), 30, body[1]);
+                }
+                else if (S.Buttons == "cua" && i == d.Default && !on)
+                {
+                    Put(cv, x, by, "<", S.BtnHot);              // the default button's brackets are bright
+                    Put(cv, x + text.Length - 1, by, ">", S.BtnHot);
+                }
+                buttonAt.Add(new Rectangle(x, by, text.Length, 1));
+                x += text.Length + 2;
+            }
+        }
+
+        // For --snapshot and --dump: press these keys first (never ones that answer Yes).
+        public void Pose(string what)
+        {
+            foreach (string k in what.Split(',')) if (k.Length > 0) Key(k == "space" ? " " : k);
         }
     }
 
@@ -955,17 +1439,19 @@ namespace OpenJuice
         readonly Timer timer = new Timer();
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
-        readonly CompletionDetector detector = new CompletionDetector();
         readonly Dictionary<int, SolidBrush> brushes = new Dictionary<int, SolidBrush>();
         ToolStripMenuItem chimeItem;
         Canvas canvas;
         int theme;
         bool quitting, startHidden;
         ToolStripMenuItem startupItem;
+        readonly Ui ui;
 
         public MonitorForm(string dataDir, bool startHidden)
         {
             this.dataDir = dataDir;
+            ui = new Ui(dataDir);
+            ui.ThemeChosen = delegate(int idx) { SetTheme(idx); };
             this.startHidden = startHidden;
             Text = "OpenJuice Monitor";
             font = Program.MakeFont();
@@ -987,7 +1473,11 @@ namespace OpenJuice
             menu.Items.Add(new ToolStripMenuItem("Show", null, delegate { Restore(); }));
             menu.Items.Add(themes);
             menu.Items.Add(chimeItem);
-            menu.Items.Add(new ToolStripMenuItem("Test chime", null, delegate { Chime(null); }));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("Set current limit...", null, delegate { Control("limit"); }));
+            menu.Items.Add(new ToolStripMenuItem("Clear fault log...", null, delegate { Control("faults"); }));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("Test chime", null, delegate { Chime(null, null); }));
             menu.Items.Add(new ToolStripMenuItem("Test error notification", null, delegate { lastKind = null; Watch("error"); }));
             startupItem = new ToolStripMenuItem("Start with Windows, in the tray") { CheckOnClick = true, Checked = AutoStart.Enabled };
             startupItem.Click += delegate { AutoStart.Set(startupItem.Checked); startupItem.Checked = AutoStart.Enabled; };
@@ -1053,7 +1543,45 @@ namespace OpenJuice
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
         static extern bool PlaySound(string sound, IntPtr module, uint flags);
 
-        void Chime(double? wh)
+        // The helper decides when a charge has finished and records it in status.json; the monitor
+        // announces each record once. The last one announced is kept in monitor.json, so a charge that
+        // finished while the monitor was not running is announced when it next starts, and a restart
+        // does not announce the same charge twice.
+        string notified;
+        bool notifiedLoaded;
+
+        void Completed(object record)
+        {
+            string path = Path.Combine(dataDir, "monitor.json");
+            bool firstRun = false;
+            if (!notifiedLoaded)
+            {
+                notifiedLoaded = true;
+                try
+                {
+                    Dictionary<string, object> m = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(path)) as Dictionary<string, object>;
+                    notified = J.S(m, "notified", null);
+                }
+                catch (Exception) { firstRun = !File.Exists(path); }
+            }
+            string t = J.S(record, "t", null);
+            if (t == null || (notified != null && string.CompareOrdinal(t, notified) <= 0)) return;
+            notified = t;
+            try { File.WriteAllText(path, "{\"notified\": \"" + t + "\"}"); } catch (Exception) { }
+            if (firstRun) return;                               // nothing to compare with yet
+            if (!J.Has(record, "wh"))
+            {
+                // The helper could not measure the charge: the charger sent neither energy counter. That is
+                // not a normal finish, so it is an alert, not the charge-complete chime.
+                SystemSounds.Exclamation.Play();
+                Toast("Charging stopped, energy unknown",
+                      "The charger sent no energy reading.\nThis may not have been a real charge. Check helper.log.", "stale");
+                return;
+            }
+            if (chimeItem.Checked) Chime(J.I(record, "wh", 0), t);
+        }
+
+        void Chime(double? wh, string when)
         {
             // Windows' "Print Complete" sound: whatever is assigned to that event in Sound settings, else
             // the stock file (the event ships with nothing assigned), else the notification sound.
@@ -1068,10 +1596,22 @@ namespace OpenJuice
             }
             catch (Exception) { }
             if (!played) SystemSounds.Asterisk.Play();
-            string msg = wh.HasValue && wh.Value > 0
-                ? "Charge complete: " + (wh.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " kWh delivered."
-                : "Charge complete.";
-            Toast("Charge complete", msg, "complete");
+            // One fact per line: the notification slides in and out, so it has to read at a glance.
+            List<string> lines = new List<string>();
+            DateTime at;
+            if (when != null && DateTime.TryParse(when, CultureInfo.InvariantCulture, DateTimeStyles.None, out at)
+                && (DateTime.Now - at).TotalMinutes > 3)        // announced late: say when it actually finished
+                lines.Add("Finished " + at.ToString(at.Date == DateTime.Today ? "'at 'h:mm tt" : "ddd' at 'h:mm tt", CultureInfo.InvariantCulture));
+            if (wh.HasValue && wh.Value > 0)
+                lines.Add((wh.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " kWh delivered");
+            if (when == null)                                   // the menu's test: the same layout, with stand-in values
+            {
+                lines.Clear();
+                lines.Add("Finished at XX:XX");
+                lines.Add("X.XX kWh delivered");
+            }
+            string msg = string.Join("\n", lines.ToArray());
+            Toast(when == null ? "Charge complete (test)" : "Charge complete", msg, "complete");
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -1130,6 +1670,9 @@ namespace OpenJuice
             lastKind = kind;
         }
 
+        // A tray-menu control: bring the window up and open the same dialog the menu bar would.
+        void Control(string action) { Restore(); ui.Run(action); Refresh1(); }
+
         void Refresh1()
         {
             // ui.json may have been changed by the terminal screen.
@@ -1138,19 +1681,20 @@ namespace OpenJuice
 
             double age;
             Dictionary<string, object> st = Program.ReadStatus(dataDir, out age);
+            ui.St = st; ui.Age = age; ui.ThemeIx = theme;
             int cols = Math.Max(80, ClientSize.Width / cw), rows = Math.Max(30, ClientSize.Height / ch);
             if (st == null) SetIcon("stale", 0, 40);
             if (st != null)
             {
-                canvas = Screen.Compose(st, age, Theme.All[theme], cols, rows, "T theme", History.Load(dataDir));
+                canvas = Screen.Compose(st, age, Theme.All[theme], cols, rows, "", History.Load(dataDir));
+                ui.Draw(canvas, Theme.All[theme]);
+                Completed(J.Get(J.Get(st, "charge"), "last_complete"));
                 object t = J.Get(st, "telemetry"), f = J.Get(t, "fields");
                 DateTime last;
                 string s = J.S(f, "S", null);
                 if (DateTime.TryParse(J.S(t, "last", ""), CultureInfo.InvariantCulture, DateTimeStyles.None, out last)
                     && (DateTime.Now - last).TotalSeconds <= 60 && s != null)
                 {
-                    double? wh = detector.Observe(last, s, J.Has(f, "L") ? (int?)J.I(f, "L", 0) : null);
-                    if (wh.HasValue && chimeItem.Checked) Chime(wh);
                     string tip = "OpenJuice: " + Screen.StateName(s) + ", " + (J.I(f, "A", 0) / 10.0).ToString("0.0", CultureInfo.InvariantCulture) + " A";
                     tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
                     SetIcon(StateIcon.KindOf(s, true), J.I(f, "A", 0) / 10.0, J.I(f, "m", 40));
@@ -1167,10 +1711,49 @@ namespace OpenJuice
             Invalidate();
         }
 
-        protected override void OnKeyDown(KeyEventArgs e)
+        // Keys go to the menus and dialogs under the same names the terminal screen uses.
+        static string KeyName(Keys data)
         {
-            if (e.KeyCode == Keys.T) SetTheme((theme + 1) % Theme.All.Length);
-            base.OnKeyDown(e);
+            Keys code = data & Keys.KeyCode, mods = data & Keys.Modifiers;
+            if (mods == Keys.Alt) return code >= Keys.A && code <= Keys.Z ? "alt+" + (char)('a' + (code - Keys.A)) : null;
+            if (mods != Keys.None && mods != Keys.Shift) return null;
+            if (code == Keys.Tab) return mods == Keys.Shift ? "shift+tab" : "tab";
+            switch (code)
+            {
+                case Keys.F1: return "f1";
+                case Keys.F2: return "f2";
+                case Keys.F5: return "f5";
+                case Keys.F8: return "f8";
+                case Keys.F9: return "f9";
+                case Keys.F10: return "f10";
+                case Keys.Home: return "home";
+                case Keys.End: return "end";
+                case Keys.Up: return "up";
+                case Keys.Down: return "down";
+                case Keys.Left: return "left";
+                case Keys.Right: return "right";
+                case Keys.Enter: return "enter";
+                case Keys.Escape: return "esc";
+                case Keys.Back: return "backspace";
+                case Keys.Space: return " ";
+            }
+            if (code >= Keys.A && code <= Keys.Z) return ((char)('a' + (code - Keys.A))).ToString();
+            if (code >= Keys.D0 && code <= Keys.D9) return ((char)('0' + (code - Keys.D0))).ToString();
+            if (code >= Keys.NumPad0 && code <= Keys.NumPad9) return ((char)('0' + (code - Keys.NumPad0))).ToString();
+            return null;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            string k = KeyName(keyData);
+            if (k != null && ui.Key(k)) { Refresh1(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && ui.Click(e.X / cw, e.Y / ch)) Refresh1();
+            base.OnMouseDown(e);
         }
 
         protected override void OnResize(EventArgs e)
@@ -1218,7 +1801,8 @@ namespace OpenJuice
 
         static bool IsLine(char c)
         {
-            return c == Canvas.H || c == Canvas.V || c == Canvas.TL || c == Canvas.TR || c == Canvas.BL || c == Canvas.BR || c == Canvas.SEP;
+            return c == Canvas.H || c == Canvas.V || c == Canvas.TL || c == Canvas.TR || c == Canvas.BL || c == Canvas.BR || c == Canvas.SEP
+                || c == Canvas.SH || c == Canvas.STL || c == Canvas.STR || c == Canvas.SBL || c == Canvas.SBR;
         }
 
         // Border characters drawn as exact pixel lines, so font smoothing cannot tint them.
@@ -1226,6 +1810,14 @@ namespace OpenJuice
         {
             int mx = x + cw / 2, my = y + ch / 2, r = x + cw, b = y + ch;
             if (c == Canvas.SEP) { g.FillRectangle(br, mx, y, 1, ch); return; }
+            if (c == Canvas.SH) { g.FillRectangle(br, x, my, cw, 1); return; }
+            if (c == Canvas.STL || c == Canvas.STR || c == Canvas.SBL || c == Canvas.SBR)
+            {
+                bool toRight = c == Canvas.STL || c == Canvas.SBL, toBottom = c == Canvas.STL || c == Canvas.STR;
+                g.FillRectangle(br, toRight ? mx : x, my, toRight ? r - mx : mx - x + 1, 1);
+                g.FillRectangle(br, mx, toBottom ? my : y, 1, toBottom ? b - my : my - y + 1);
+                return;
+            }
             if (c == Canvas.H) { g.FillRectangle(br, x, my - 1, cw, 1); g.FillRectangle(br, x, my + 1, cw, 1); return; }
             if (c == Canvas.V) { g.FillRectangle(br, mx - 1, y, 1, ch); g.FillRectangle(br, mx + 1, y, 1, ch); return; }
             bool right = c == Canvas.TL || c == Canvas.BL;       // the arm runs to the right edge
@@ -1252,7 +1844,7 @@ namespace OpenJuice
                     while (x < cv.W && cv.C[y, x].Fg == fg && cv.C[y, x].Bg == bg)
                     {
                         char c = cv.C[y, x].Ch;
-                        if ((c >= '\u2581' && c <= '\u258f') || IsLine(c)) c = ' ';   // blocks and borders are painted below
+                        if ((c >= '\u2580' && c <= '\u258f') || IsLine(c)) c = ' ';   // blocks and borders are painted below
                         else if (c != ' ') ink = true;
                         sb.Append(c);
                         x++;
@@ -1263,6 +1855,8 @@ namespace OpenJuice
                     {
                         char b = cv.C[y, i].Ch;
                         if (IsLine(b)) { Line(g, Brush(brushes, fg), b, i * cw, y * ch, cw, ch); continue; }
+                        if (b == Canvas.UPPER) { g.FillRectangle(Brush(brushes, fg), i * cw, y * ch, cw, ch / 2); continue; }
+                        if (b == Canvas.LOWER) { g.FillRectangle(Brush(brushes, fg), i * cw, y * ch + ch - ch / 2, cw, ch / 2); continue; }
                         if (b < '\u2581' || b > '\u258f') continue;
                         if (b > Canvas.FULL)                         // left-aligned eighths: a horizontal bar's tip
                             g.FillRectangle(Brush(brushes, fg), i * cw, y * ch, cw * ('\u2590' - b) / 8, ch);
@@ -1336,7 +1930,20 @@ namespace OpenJuice
                 Dictionary<string, object> st = ReadStatus(dir, out age);
                 if (st == null) return 1;
                 Theme T = Theme.All[Theme.IndexOf(args.Length >= 3 ? args[2] : LoadTheme(dir))];
-                Canvas cv = Screen.Compose(st, age, T, 80, 32, "T theme", History.Load(dir));
+                Canvas cv = Screen.Compose(st, age, T, 80, 32, "", History.Load(dir));
+                Ui shot = new Ui(dir) { St = st, Age = age, ThemeIx = Theme.IndexOf(T.Name) };
+                if (args.Length >= 5) shot.Pose(args[4]);       // e.g. "f10,enter" or "l,4,1,enter": keys to press first
+                shot.Draw(cv, T);
+                if (args[1].EndsWith(".txt"))                   // the cell grid as text, to compare with the terminal screen
+                {
+                    StringBuilder sb = new StringBuilder();
+                    for (int y = 0; y < cv.Hgt; y++)
+                        for (int x = 0; x < cv.W; x++)
+                            sb.Append(y).Append(' ').Append(x).Append(' ').Append((int)cv.C[y, x].Ch).Append(' ')
+                              .Append(cv.C[y, x].Fg).Append(' ').Append(cv.C[y, x].Bg).Append('\n');
+                    File.WriteAllText(args[1], sb.ToString());
+                    return 0;
+                }
                 using (Font font = MakeFont())
                 {
                     int cw, ch;

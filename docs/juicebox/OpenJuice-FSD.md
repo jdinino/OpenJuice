@@ -298,7 +298,7 @@ Follow the phase gates in [STATUS.md](../STATUS.md) §6. The safety-critical rul
 | R13 | **D12 resets the WiFi module on V8.10 and v8.12**, but the V8.9 patch pulses it as the GFI test pin | High | Hold D12 inactive on later boards; move the GFI test to the verified pin |
 | R14 | **The vendor WiFi app loses its data source after the port**; its reaction is unknown, and it must keep running to bring up WiFi | High | The pre-flash capture shows what it expects; rehearse on the spare board if it has a module |
 | R11 | **Metering moved to an ATM90E26 from v8.12** | High | If the board follows v8.12, write a driver; do not assume an analog CT |
-| R12 | **WiFi module Safe Mode at 8 faults**; it then attempts an OTA on its own. The helper also pauses control at 6, and **while paused the 26 A cap is unenforced** — 2026-10-12 the module held 40 A for ~2 h and the car drew 31.7 A | Medium | Watch the fault count (§ STATUS watch items); keep the PC awake so outages stop adding crashes; clear the log with `faults_reset` before it reaches 6; do not provoke crashes |
+| R12 | **WiFi module Safe Mode at 8 faults** **[D]**; the safemode app is then expected to attempt an OTA on its own, because the vendor documents that behaviour for `system.safemode.ota_auto_retry` and this module has it set to 1 **[D]**/**[V]**. Neither Safe Mode nor the OTA has been observed on this unit **[I]** (evidence in STATUS § watch items). The helper also pauses control at 6, and **while paused the 26 A cap is unenforced** — 2026-10-12 the module held 40 A for ~2 h and the car drew 31.7 A | Medium | Watch the fault count (§ STATUS watch items); keep the PC awake so outages stop adding crashes; clear the log with `faults_reset` before it reaches 6; do not provoke crashes |
 
 ---
 

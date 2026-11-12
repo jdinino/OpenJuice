@@ -139,6 +139,21 @@ class Config:
             json.dump(raw, f, indent=2)
         os.replace(tmp, path)
 
+    @staticmethod
+    def drop(path, key):
+        """Remove one key, used to forget a one-shot request once it has been handled."""
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            return
+        if key in raw:
+            del raw[key]
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(raw, f, indent=2)
+            os.replace(tmp, path)
+
 
 # ------------------------------ module interface ----------------------------- #
 OK, EMPTY, DOWN, ERROR = "ok", "empty", "down", "error"
@@ -146,10 +161,12 @@ Reply = collections.namedtuple("Reply", "kind code text")
 
 # The only commands this program can send to the module. Anything else, in particular
 # `save`, any `zap.` variable and `set wlan.static.*`, is refused here so that no later
-# edit can send it by accident. Never add port 2000 or `save`.
+# edit can send it by accident. Never add port 2000 or `save`. `faults_reset` is sent only
+# on an owner request (Watchdog.clear_faults), never on the helper's own initiative.
 ALLOWED_COMMANDS = [re.compile(p) for p in (
     r"get [a-z0-9_.]+",
     r"faults_print",
+    r"faults_reset",                  # owner request only; see Watchdog.clear_faults
     r"set wlan\.dhcp\.enabled 0",     # live only; the module reverts it on reboot
     r"network_restart",
     r"reboot",                        # takes effect even when the reply is empty
@@ -330,8 +347,11 @@ class Watchdog:
     REATTACHES_PER_HOUR = 3
     BLOCK_BACKOFF = 3600      # s before retrying after a failed precheck
     FAULT_GUARD = 6           # stop reattaching at this many module faults (Safe Mode at 8)
+    REQUEST_MAX_AGE = 300     # s; an older one-shot request is dropped unhandled
 
-    def __init__(self, module, shared, config, clock=time.monotonic, our_ip=local_ip_for):
+    def __init__(self, module, shared, config, clock=time.monotonic, our_ip=local_ip_for, forget=None):
+        self.forget = forget          # callable(key): removes a handled request from helper.json
+        self.last_request = None
         self.module = module
         self.shared = shared
         self.config = config          # callable returning the current settings
@@ -376,6 +396,45 @@ class Watchdog:
         self.faults = n
         return n
 
+    def clear_faults(self, requested):
+        """Clear the module's fault log because the owner asked (monitor or `clear-faults`).
+
+        `requested` is the local time of the request. It is handled once and then forgotten,
+        whether or not it worked, and ignored when stale, so a request left in helper.json can
+        never fire later or repeat. The log is copied to helper.log before it is cleared.
+        """
+        self.last_request = requested
+        if self.forget:
+            try:
+                self.forget("clear_faults")
+            except OSError as e:
+                log.warning("could not remove the handled request from helper.json: %s", e)
+        try:
+            age = (datetime.datetime.now() - datetime.datetime.fromisoformat(str(requested))).total_seconds()
+        except ValueError:
+            age = None
+        if age is None or not -60 <= age <= self.REQUEST_MAX_AGE:
+            self.shared.note("ignored a request to clear the fault log: it is not recent (%s)" % requested,
+                             logging.WARNING)
+            return
+        r = self.module.command("faults_print")
+        if r.kind != OK or r.code != 0:
+            self.shared.note("fault log not cleared: could not read it first (%s)" % r.kind, logging.WARNING)
+            return
+        before = fault_count(r.text)
+        for line in r.text.splitlines():
+            if line.strip():
+                log.info("fault log before clearing: %s", line.strip())
+        r = self.module.command("faults_reset")
+        after = self._read_faults()
+        if after == 0:
+            self.shared.note("fault log cleared at the owner's request: %d to 0 of 8" % before)
+            self.blocked_until = -math.inf          # a fault block no longer applies
+        else:
+            self.shared.note("fault log not cleared: faults_reset replied %s %s; the log now reads %s"
+                             % (r.kind, r.text, "unknown" if after is None else "%d of 8" % after),
+                             logging.WARNING)
+
     def silent_for(self, now):
         return min(self.shared.telemetry_age(now), now - self.started, now - self.last_action)
 
@@ -384,6 +443,10 @@ class Watchdog:
         now = self.clock() if now is None else now
         cfg = self.config()
         age = self.shared.telemetry_age(now)
+
+        req = cfg.get("clear_faults")
+        if req and req != self.last_request:
+            self.clear_faults(req)
 
         if cfg["mode"] == "released":
             if age <= self.STALE and now - self.release_sent > 300:
@@ -671,9 +734,12 @@ def listener_loop(shared, config, keeper, tlog, stop, port=8042, watch=None):
                 if done:
                     with shared.lock:
                         shared.last_complete = done
-                    shared.note("charge complete at %s%s" % (
-                        done["t"][11:], "" if done["wh"] is None else ", %.1f kWh delivered"
-                        % (done["wh"] / 1000.0)))
+                    if done["wh"] is None:      # neither energy counter in any frame: not a normal charge
+                        shared.note("charging stopped at %s, but the charger sent no energy counters; "
+                                    "cannot confirm a real charge" % done["t"][11:], logging.WARNING)
+                    else:
+                        shared.note("charge complete at %s, %.1f kWh delivered"
+                                    % (done["t"][11:], done["wh"] / 1000.0))
             except Exception:                # one bad frame must not kill telemetry + correction
                 if quiet_since is None or time.monotonic() - quiet_since > 600:
                     quiet_since = time.monotonic()
@@ -883,7 +949,8 @@ def write_status(path, shared, wd, keeper, config, started_wall):
             "resolver": {"last_hijack": shared.dns_wall, "hijacks": shared.dns_hijacks,
                          "ignored": shared.dns_ignored},
             "beacon": shared.beacon,
-            "limit": {"outcome": keeper.outcome, "corrections_24h": keeper.corrections_24h()},
+            "limit": {"target": config()["target_amps"], "outcome": keeper.outcome,
+                      "corrections_24h": keeper.corrections_24h()},
             "charge": {"last_complete": shared.last_complete},
             "events": list(shared.events),
         }
@@ -908,7 +975,8 @@ def run(args):
     shared = Shared()
     module = Module(lambda: shared.module_host(time.monotonic(), config()["charger_host"]))
     keeper = LimitKeeper(shared.note)
-    wd = Watchdog(module, shared, config)
+    cfg_path = os.path.join(data_dir, "helper.json")
+    wd = Watchdog(module, shared, config, forget=lambda key: Config.drop(cfg_path, key))
     previous, _ = read_status(data_dir)
     if previous:                       # so a crash while the helper was down is still noticed
         wd.faults = previous.get("watchdog", {}).get("module_faults")
@@ -1021,10 +1089,16 @@ def _hhmmss(iso):
 _UNI = {"h": "═", "v": "║", "tl": "╔", "tr": "╗", "bl": "╚", "br": "╝",
         "full": "█", "empty": "░", "desk": "░", "sep": "│", "mark": "▼",
         "part": "\u2581\u2582\u2583\u2584\u2585\u2586\u2587",
-        "hpart": "\u258f\u258e\u258d\u258c\u258b\u258a\u2589"}
+        "hpart": "\u258f\u258e\u258d\u258c\u258b\u258a\u2589",
+        "sh": "─", "sv": "│", "stl": "┌", "str": "┐", "sbl": "└", "sbr": "┘",
+        "stee": "├", "etee": "┤", "dot": "•",
+        "sys": "≡", "box": "■", "lower": "▄", "upper": "▀"}
 _ASC = {"h": "=", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+",
         "full": "#", "empty": ".", "desk": " ", "sep": "|", "mark": "v",
-        "part": "", "hpart": ""}
+        "part": "", "hpart": "",
+        "sh": "-", "sv": "|", "stl": "+", "str": "+", "sbl": "+", "sbr": "+",
+        "stee": "+", "etee": "+", "dot": "*",
+        "sys": "=", "box": "x", "lower": " ", "upper": " "}
 
 # Colours are ANSI SGR numbers: (fg, bg) pairs, or a lone fg. tools/juicebox/monitor/
 # OpenJuiceMonitor.cs carries the same table; change both together.
@@ -1117,21 +1191,30 @@ class _Canvas:
             self.put(x, yy, ch * w, fg, bg)
 
     def shade(self, x, y, w, h, fg, bg):
+        """A drop shadow, as Turbo Vision casts it: the cells keep their characters and only
+        change colour. Dark grey on black would vanish on a black cell, so that one is reversed."""
         for yy in range(max(0, y), min(self.h, y + h)):
             for xx in range(max(0, x), min(self.w, x + w)):
-                self.cells[yy][xx] = (" ", fg, bg)
+                ch, _, b0 = self.cells[yy][xx]
+                self.cells[yy][xx] = (ch, 30, 100) if (fg, bg, b0) == (90, 40, 40) else (ch, fg, bg)
 
-    def window(self, x, y, w, h, title, colors, shadow, g):
+    def window(self, x, y, w, h, title, colors, shadow, g, frame=None, single=False):
+        """A framed box with a centred title and a shadow. `frame` colours the border and title
+        apart from the body; `single` draws the one-line frame of a window that is not the main one."""
         fg, bg = colors
+        ffg, fbg = frame or colors
+        hz, vt = (g["sh"], g["sv"]) if single else (g["h"], g["v"])
+        tl, tr, bl, br = ((g["stl"], g["str"], g["sbl"], g["sbr"]) if single
+                          else (g["tl"], g["tr"], g["bl"], g["br"]))
         self.shade(x + 2, y + 1, w, h, *shadow)             # drop shadow
         self.fill(x, y, w, h, " ", fg, bg)
-        self.put(x, y, g["tl"] + g["h"] * (w - 2) + g["tr"])
-        self.put(x, y + h - 1, g["bl"] + g["h"] * (w - 2) + g["br"])
+        self.put(x, y, tl + hz * (w - 2) + tr, ffg, fbg)
+        self.put(x, y + h - 1, bl + hz * (w - 2) + br, ffg, fbg)
         for yy in range(y + 1, y + h - 1):
-            self.put(x, yy, g["v"])
-            self.put(x + w - 1, yy, g["v"])
+            self.put(x, yy, vt, ffg, fbg)
+            self.put(x + w - 1, yy, vt, ffg, fbg)
         t = " %s " % title
-        self.put(x + (w - len(t)) // 2, y, t)
+        self.put(x + (w - len(t)) // 2, y, t, ffg, fbg)
 
     def render(self, color):
         lines = []
@@ -1282,7 +1365,7 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
         x += 2
 
     ww = (W - 10) // 2                                      # leaves desktop around every shadow
-    lx, rx, ty, th = 2, 2 + ww + 4, 2, 9
+    lx, rx, ty, th = 2, 2 + ww + 4, 2, 10
     fw, cy, chh, by, bh = 2 * ww + 4, 13, 9, 24, H - 26     # charts row, then the Event log
     iw = ww - 4                                             # text columns inside a window
     bw = iw - 17                                            # bar cells in a "label bar value" row
@@ -1342,24 +1425,35 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
         scol = T[{"2": "ok", "1": "info", "0": "idle", "5": "bad"}.get(sc, "idle")]
         chip(lx, ty, 0, "State", sname, scol, " %ds ago" % t["age_s"] if t["age_s"] is not None else "")
         a, v, temp = _ival(f, "A") / 10.0, _ival(f, "V") / 10.0, _ival(f, "T")
-        bar(lx, ty, 1, "Current", a, circ, "%.1f A" % a, cap, bad=a > cap + 0.05)
-        bar(lx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
+        # Three bands, the same as the Health window beside it, so the two read across: status
+        # chips, then every gauge, then plain figures.
+        # The limit is the one the charger reports, flagged while it differs from the helper's.
+        target = (st.get("limit") or {}).get("target")
+        if "M" not in f:
+            text(lx, ty, 1, "Limit", "-")
+        elif target is not None and target != cap:
+            chip(lx, ty, 1, "Limit", "%d A" % cap, T["warn"], " target %d A" % target)
+        else:
+            chip(lx, ty, 1, "Limit", "%d A" % cap, T["info"])
+        bar(lx, ty, 2, "Current", a, circ, "%.1f A" % a, cap, bad=a > cap + 0.05)
+        bar(lx, ty, 4, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
         bar(lx, ty, 3, "Volts", v - 200, 60, "%.1f V" % v, bad=not 210 <= v <= 255)
-        bar(lx, ty, 4, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
+        bar(lx, ty, 5, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
         if sc == "2" and "E" in f:                  # charging: this session so far
-            text(lx, ty, 5, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0))
+            text(lx, ty, 6, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0))
         elif done:                                  # otherwise the last finished charge: when, how much
             when = done["t"][11:16] if done["t"][:10] == now.strftime("%Y-%m-%d") else done["t"][5:16]
-            chip(lx, ty, 5, "Finished", when.replace("T", " "), T["ok"],
+            chip(lx, ty, 6, "Finished", when.replace("T", " "), T["ok"],
                  "" if done.get("wh") is None else " %.1f kWh" % (done["wh"] / 1000.0))
         else:
-            text(lx, ty, 5, "Finished", "no charge seen yet")
-        text(lx, ty, 6, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
+            text(lx, ty, 6, "Finished", "no charge seen yet")
+        text(lx, ty, 7, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
     else:
         cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper started", iw))
 
     # --- Health: helper, link and the counters that have limits -------------------
-    cv.window(rx, ty, ww, th, "Health", T["win"], T["shadow"], g)
+    single = _style(theme)["single"]
+    cv.window(rx, ty, ww, th, "Health", T["win"], T["shadow"], g, single=single)
     w = st["watchdog"]
     try:
         up = _dur((now - datetime.datetime.fromisoformat(st["started"])).total_seconds())
@@ -1392,7 +1486,7 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
 
     # --- Chart: current per minute --------------------------------------------------
     nb = iw - 3
-    cv.window(lx, cy, ww, chh, "Current per minute, A", T["win"], T["shadow"], g)
+    cv.window(lx, cy, ww, chh, "Current per minute, A", T["win"], T["shadow"], g, single=single)
     bottom = cy + 6
     if hist:
         cv.put(lx + 2, cy + 1, "%2d" % circ)
@@ -1415,7 +1509,7 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
         cv.put(lx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
     # --- Chart: energy per day ------------------------------------------------------
-    cv.window(rx, cy, ww, chh, "Energy per day, kWh", T["win"], T["shadow"], g)
+    cv.window(rx, cy, ww, chh, "Energy per day, kWh", T["win"], T["shadow"], g, single=single)
     if hist and hist["days"]:
         days = hist["days"][-(chh - 2):]
         top = max([k for _, k in days if k] or [1.0])
@@ -1441,7 +1535,7 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
         cv.put(rx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
     # --- Event log ------------------------------------------------------------------
-    cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g)
+    cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g, single=single)
     n = max(0, min(events, bh - 2)) if events else 0
     for i, e in enumerate(st["events"][-n:] if n else []):
         cv.put(lx + 2, by + 1 + i, str(e["t"])[:19].replace("T", " "), T["logtime"])
@@ -1456,42 +1550,512 @@ def _dashboard(st, age, events, color=False, size=(80, 32), ascii_only=False, hi
     return _compose(st, age, events, glyphs, size, hint, theme, hist).render(color)
 
 
-def _keys():
-    """Keys pressed since the last call (Windows console only)."""
-    if os.name != "nt":
-        return ""
+# ---- status TUI: menu bar, pull-down menus and dialogs ----
+# The desktop monitor carries the same menus and dialogs (class Ui in OpenJuiceMonitor.cs); change
+# both together. Like the monitor, the screen never contacts the charger: a control writes one
+# value to helper.json for the running helper to act on, and asks Yes or No first.
+#
+# Keys behave the same in every theme; a theme changes only how things are drawn. Each theme
+# follows one of three period styles (sources: the Turbo Vision 2.0 source as kept in
+# magiblot/tvision, FAR Manager's palette and Midnight Commander's default skin, and Microsoft's
+# QuickBASIC manual for monochrome screens):
+#   tv    Borland Turbo Vision: grey dialogs with a close box, green buttons with a half-block
+#         shadow, a green selection bar, "F10 Menu" status items, single frames on all but the
+#         main window.
+#   nc    Norton Commander / FAR: cyan menus with a black selection bar and yellow hot letters,
+#         "{ No }" as the default button, red boxes for irreversible actions, a numbered
+#         function-key bar.
+#   mono  one-hue screens: reverse video for selection, a brighter cell for hot letters,
+#         "< OK >" buttons, "F10=Menu" status items.
+_FAMILY = {"commander": "nc", "phosphor": "mono", "amber": "mono", "mono": "mono"}      # others: tv
+
+
+def _style(name):
+    """Colours and drawing choices for menus and dialogs, derived from a theme."""
+    T = THEMES.get(name, THEMES["turbo"])
+    fam = _FAMILY.get(name, "tv")
+    bar, bright = T["bar"], T["main"]
+    if fam == "tv":
+        hot = (T["key"], bar[1])
+        return dict(family=fam, buttons="tv", status="tv", closebox=True, single=True,
+                    barhot=hot, menu=bar, menuhot=hot, sel=(30, 42), selhot=(31, 42),
+                    dlg=(30, 47), frame=(97, 47), icon=(92, 47), err=None, errfocus=None, errhot=None,
+                    btn=(30, 42), btnhot=(93, 42), focus=(97, 42), focushot=(93, 42),
+                    input=(97, 44), inputsel=(97, 42))
+    if fam == "nc":
+        return dict(family=fam, buttons="far", status="fn", closebox=False, single=False,
+                    barhot=(93, bar[1]), menu=(97, 46), menuhot=(93, 46), sel=(97, 40), selhot=(93, 40),
+                    dlg=(30, 47), frame=(30, 47), icon=None, err=(97, 41), errfocus=(30, 47), errhot=(93, 41),
+                    btn=(30, 47), btnhot=(93, 47), focus=(30, 46), focushot=(93, 46),
+                    input=(30, 46), inputsel=(97, 40))
+    lit = (30, bar[1] + 60)                         # one hue: a brighter cell stands in for colour
+    return dict(family=fam, buttons="cua", status="kv", closebox=False, single=False,
+                barhot=lit, menu=bar, menuhot=lit, sel=bright, selhot=bar,
+                dlg=T["win"], frame=(bright[0], T["win"][1]), icon=None, err=None, errfocus=None, errhot=None,
+                btn=T["win"], btnhot=(bright[0], T["win"][1]), focus=bar, focushot=lit,
+                input=bar, inputsel=bright)
+
+
+# -- keys: one name per key, the same names in the monitor --
+_VK = {0x70: "f1", 0x71: "f2", 0x74: "f5", 0x77: "f8", 0x78: "f9", 0x79: "f10",
+       0x26: "up", 0x28: "down", 0x25: "left", 0x27: "right", 0x24: "home", 0x23: "end",
+       0x0D: "enter", 0x1B: "esc", 0x08: "backspace", 0x20: " "}
+
+
+def _key_name(vk, char, state):
+    """Name of a console key-down event: virtual key, character, control-key state. None to ignore."""
+    alt = bool(state & 0x3) and not state & 0xC      # either Alt, and not AltGr (which sets Ctrl too)
+    if vk == 0x09:
+        return "shift+tab" if state & 0x10 else "tab"
+    if alt:
+        return "alt+" + chr(vk).lower() if 0x41 <= vk <= 0x5A else None
+    if vk in _VK:
+        return _VK[vk]
+    if state & 0xC:                                  # Ctrl combinations are not ours
+        return None
+    return char.lower() if char and char.isprintable() else None
+
+
+_SPECIAL_KEYS = {"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O": "end",
+                 ";": "f1", "<": "f2", "?": "f5", "B": "f8", "C": "f9", "D": "f10", "\x0f": "shift+tab"}
+_PLAIN_KEYS = {"\r": "enter", "\x1b": "esc", "\t": "tab", "\b": "backspace"}
+
+
+def _read_keys_msvcrt():
+    """Fallback reader. It cannot see Alt: Alt+letter arrives as the plain letter."""
     import msvcrt
-    out = ""
+    out = []
     while msvcrt.kbhit():
-        out += msvcrt.getwch()
-    return out.lower()
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):                  # arrows and function keys arrive as two codes
+            name = _SPECIAL_KEYS.get(msvcrt.getwch())
+            if name:
+                out.append(name)
+        else:
+            out.append(_PLAIN_KEYS.get(ch, ch.lower()))
+    return out
+
+
+def _read_keys():
+    """Keys pressed since the last call, as names (Windows console only).
+
+    Reads console input records, because the C runtime's getwch hands Alt+letter over as the
+    bare letter. Falls back to msvcrt when stdin is not a console.
+    """
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class KeyEvent(ctypes.Structure):
+            _fields_ = [("down", wintypes.BOOL), ("repeat", wintypes.WORD), ("vk", wintypes.WORD),
+                        ("scan", wintypes.WORD), ("char", wintypes.WCHAR), ("state", wintypes.DWORD)]
+
+        class Record(ctypes.Structure):
+            _fields_ = [("type", wintypes.WORD), ("key", KeyEvent)]      # the union's largest member
+
+        k = ctypes.windll.kernel32
+        k.GetStdHandle.restype = wintypes.HANDLE
+        h = k.GetStdHandle(-10)
+        n = wintypes.DWORD()
+        if not k.GetNumberOfConsoleInputEvents(wintypes.HANDLE(h), ctypes.byref(n)):
+            return _read_keys_msvcrt()
+        out = []
+        while n.value:
+            recs = (Record * n.value)()
+            got = wintypes.DWORD()
+            if not k.ReadConsoleInputW(wintypes.HANDLE(h), recs, n.value, ctypes.byref(got)):
+                break
+            for r in recs[:got.value]:
+                if r.type == 1 and r.key.down:       # KEY_EVENT, key going down
+                    name = _key_name(r.key.vk, r.key.char, r.key.state)
+                    if name:
+                        out.append(name)
+            if not k.GetNumberOfConsoleInputEvents(wintypes.HANDLE(h), ctypes.byref(n)):
+                break
+        return out
+    except Exception:
+        return _read_keys_msvcrt()
+
+
+class _Ui:
+    """State of the menu bar, the open menu and the open dialog; draws them over a _Canvas."""
+    SAY_FOR = 4.0             # s a result stays on the status line
+    FN = {"f1": "about", "f2": "limit", "f8": "faults"}       # function keys, as the nc key bar shows
+
+    def __init__(self, data_dir, theme, can_quit=True, clock=time.monotonic):
+        self.data_dir, self.theme, self.clock, self.can_quit = data_dir, theme, clock, can_quit
+        # Items: (label, index of its hot letter, key shown at the right, action, status-line hint)
+        system = [("About OpenJuice...", 0, "F1", "about", "What this screen is")]
+        if can_quit:
+            system += [None, ("Exit", 1, "Alt-X", "quit", "Leave the status screen")]
+        charger = [("Set current limit...", 12, "F2", "limit", "Change the current limit"),
+                   ("Clear fault log...", 6, "F8", "faults", "Clear the module's fault log")]
+        themes, used = [], set()
+        for n in THEME_ORDER:
+            hot = next(i for i, c in enumerate(n) if c not in used)
+            used.add(n[hot])
+            themes.append((n, hot, "", "theme:" + n, "Switch to the %s theme" % n))
+        self.menus = [("≡", -1, system), ("Charger", 0, charger), ("Theme", 0, themes)]
+        self.menu = None          # index of the highlighted menu title
+        self.opened = False       # whether its pull-down is showing
+        self.item = 0
+        self.dialog = None
+        self.said, self.said_until = "", 0.0
+        self.st, self.age = None, math.inf
+        self.quit = False
+
+    # -- state --
+    @property
+    def active(self):
+        return self.menu is not None or self.dialog is not None
+
+    def say(self, text):
+        self.said, self.said_until = text, self.clock() + self.SAY_FOR
+
+    def _close(self):
+        self.menu, self.opened = None, False
+
+    def _open(self, index, show=True):
+        self.menu, self.opened = index % len(self.menus), show
+        title, _, items = self.menus[self.menu]
+        self.item = min(THEME_ORDER.index(self.theme), len(items) - 1) if title == "Theme" else 0
+
+    def _move(self, step):
+        items = self.menus[self.menu][2]
+        while True:
+            self.item = (self.item + step) % len(items)
+            if items[self.item] is not None:
+                return
+
+    def key(self, k):
+        """Handle one key name. True when it was used."""
+        if self.dialog:
+            return self._dialog_key(k)
+        if self.menu is not None:
+            return self._menu_key(k)
+        if k in ("f10", "f9", "m"):
+            self._open(1, show=False)                 # highlights the first named menu; Enter opens it
+        elif k.startswith("alt+") and self._title(k[4:]) is not None:
+            self._open(self._title(k[4:]))
+        elif k == "alt+x" or k == "q":
+            if not self.can_quit:
+                return False
+            self.run("quit")
+        elif k in ("t", "f5"):
+            self.run("theme:" + THEME_ORDER[(THEME_ORDER.index(self.theme) + 1) % len(THEME_ORDER)])
+        elif k in self.FN:
+            self.run(self.FN[k])
+        elif k in ("l", "f"):
+            self.run("limit" if k == "l" else "faults")
+        else:
+            return False
+        return True
+
+    def _title(self, letter):
+        for i, (title, hot, _) in enumerate(self.menus):
+            if hot >= 0 and title[hot].lower() == letter:
+                return i
+        return None
+
+    def _menu_key(self, k):
+        """A menu is modal: every key is used here, and letters mean this menu's own items."""
+        items = self.menus[self.menu][2]
+        if k in ("esc", "f10", "f9"):
+            self._close()
+        elif k in ("left", "right"):
+            self._open(self.menu + (1 if k == "right" else -1), self.opened)
+        elif k.startswith("alt+") and self._title(k[4:]) is not None:
+            self._open(self._title(k[4:]))
+        elif not self.opened:
+            if k in ("enter", "down", "up"):
+                self.opened = True
+            elif len(k) == 1 and self._title(k) is not None:
+                self._open(self._title(k))
+        elif k in ("up", "down"):
+            self._move(1 if k == "down" else -1)
+        elif k in ("home", "end"):
+            self.item = -1 if k == "home" else len(items)
+            self._move(1 if k == "home" else -1)
+        elif k == "enter":
+            self.run(items[self.item][3])
+        elif len(k) == 1:
+            for it in items:
+                if it and it[1] >= 0 and it[0][it[1]].lower() == k:
+                    self.run(it[3])
+                    break
+        return True
+
+    def _limits(self):
+        try:
+            top = max(J1772_MIN, min(HARD_MAX, int(self.st["telemetry"]["fields"].get("m", HARD_MAX))))
+        except (ValueError, TypeError, KeyError):
+            top = HARD_MAX
+        now = Config(os.path.join(self.data_dir, "helper.json")).get()["target_amps"]
+        return top, now
+
+    def _info(self, title, lines, tone=""):
+        self.dialog = dict(kind="info", title=title, lines=lines, focus=0, default=0, tone=tone)
+
+    def run(self, action):
+        self._close()
+        if action == "quit":
+            self.quit = True
+        elif action.startswith("theme:"):
+            self.theme = action[6:]
+            save_theme(self.data_dir, self.theme)
+        elif action == "about":
+            self._info("About", ["OpenJuice status screen", "JuiceBox Gen 1 under local control",
+                                 "Helper %s" % VERSION])
+        elif self.st is None or self.age >= 30:
+            self._info("Helper not running", ["The helper is not running,", "so nothing was sent."], "err")
+        elif action == "limit":
+            top, now = self._limits()
+            self.dialog = dict(kind="input", title="Set current limit", top=top, now=now, tone="",
+                               lines=["Limit in amps, %d to %d:" % (J1772_MIN, top)],
+                               value=str(now), fresh=True, focus=0, default=0, error="")
+        elif action == "faults":
+            n = self.st["watchdog"].get("module_faults")
+            self.dialog = dict(kind="confirm", title="Clear fault log", focus=1, default=1, do=("clear",),
+                               tone="err",
+                               lines=["Clear the charger's fault log (%s)?"
+                                      % ("count unknown" if n is None else "%d of 8" % n),
+                                      "It is copied to helper.log first, then",
+                                      "permanently cleared on the charger."],
+                               no="Fault log left as it is.")
+
+    def _dialog_key(self, k):
+        d = self.dialog
+        if d["kind"] == "info":
+            if k in ("enter", "esc", " ", "o"):
+                self.dialog = None
+            return True
+        if k in ("left", "right", "tab", "shift+tab"):
+            d["focus"] = 1 - d["focus"]
+        elif k == "esc":
+            self._answer(False)
+        elif k in ("enter", " "):
+            self._answer(d["focus"] == 0)
+        elif d["kind"] == "confirm":
+            if k in ("y", "n"):
+                self._answer(k == "y")
+        elif k in ("o", "c"):
+            self._answer(k == "o")
+        elif k == "backspace":
+            d["value"], d["fresh"] = ("" if d["fresh"] else d["value"][:-1]), False
+        elif k in ("up", "down"):
+            v = int(d["value"] or d["now"]) + (1 if k == "up" else -1)
+            d["value"], d["fresh"] = str(max(J1772_MIN, min(d["top"], v))), False
+        elif len(k) == 1 and k.isdigit():
+            d["value"] = k if d["fresh"] else (d["value"] + k)[:2]
+            d["fresh"] = False
+        return True
+
+    def cancel(self):
+        """The close box, or anything else that dismisses a dialog without an answer."""
+        if self.dialog:
+            if self.dialog["kind"] == "info":
+                self.dialog = None
+            else:
+                self._answer(False)
+
+    def _answer(self, yes):
+        d, self.dialog = self.dialog, None
+        if d["kind"] == "input":
+            if not yes:
+                self.say("Limit left at %d A." % d["now"])
+                return
+            amps = int(d["value"]) if d["value"] else 0
+            if not J1772_MIN <= amps <= d["top"]:
+                d["error"], d["fresh"] = "Enter %d to %d." % (J1772_MIN, d["top"]), True
+                self.dialog = d
+                return
+            self.dialog = dict(kind="confirm", title="Set current limit", focus=1, default=1, tone="",
+                               do=("target", amps),
+                               lines=["Set the charger's current limit to %d A?" % amps,
+                                      "It is %d A now." % d["now"]],
+                               no="Limit left at %d A." % d["now"])
+            return
+        if not yes:
+            self.say(d["no"])
+            return
+        path = os.path.join(self.data_dir, "helper.json")
+        try:
+            if d["do"][0] == "target":
+                Config.update(path, target_amps=d["do"][1])
+                self.say("Asked the helper for a %d A limit." % d["do"][1])
+            else:
+                Config.update(path, clear_faults=wall())
+                self.say("Asked the helper to clear the fault log.")
+        except (OSError, ValueError) as e:
+            self.say("Could not write helper.json: %s" % e)
+
+    # -- drawing --
+    def _status(self, cv, g, S, bar):
+        W, y = cv.w, cv.h - 1
+        cv.fill(0, y, W, 1, " ", *bar)
+        note = ""                                   # the highlighted menu item's hint
+        if self.menu is not None and self.opened and self.menus[self.menu][2][self.item]:
+            note = self.menus[self.menu][2][self.item][4]
+        elif self.said and self.clock() < self.said_until:
+            cv.put(1, y, _clip(self.said, W - 2))    # a result takes the whole line for a few seconds
+            return
+        if S["status"] == "fn":                      # ten numbered cells; unbound keys stay blank
+            if note:
+                cv.put(1, y, _clip(note, W - 2))
+                return
+            labels = {1: "About", 2: "Limit", 5: "Theme", 8: "Faults", 9: "Menu", 10: "Menu"}
+            cell = W // 10
+            for i in range(10):
+                cv.put(i * cell, y, "%2d" % (i + 1), 37, 40)
+                cv.put(i * cell + 2, y, ("%-*s" % (cell - 2, labels.get(i + 1, "")))[:cell - 2], 30, 46)
+            cv.fill(10 * cell, y, W - 10 * cell, 1, " ", 30, 46)
+            return
+        keys = [("F10", "Menu"), ("L", "Limit"), ("F", "Faults"), ("T", "Theme")]
+        if self.can_quit:
+            keys.append(("Alt-X", "Exit"))
+        x = 1
+        for k, text in keys:
+            if S["status"] == "kv":                  # Key=Action
+                cv.put(x, y, "%s=%s" % (k.replace("-", "+"), text))
+                x += len(k) + len(text) + 3
+            else:
+                cv.put(x, y, k, *S["barhot"])
+                cv.put(x + len(k) + 1, y, text)
+                x += len(k) + len(text) + 3
+        if note:
+            cv.put(x, y, g["sep"] + " " + _clip(note, W - x - 3))
+
+    def draw(self, cv, g):
+        T = THEMES.get(self.theme, THEMES["turbo"])
+        S = _style(self.theme)
+        bar = T["bar"]
+        W, H = cv.w, cv.h
+        cv.fill(0, 0, max(0, W - 21), 1, " ", *bar)             # menu bar, left of the clock
+        x, xs = 1, []
+        for i, (title, hot, _) in enumerate(self.menus):
+            shown = g["sys"] if hot < 0 else title
+            xs.append(x)
+            if i == self.menu:
+                cv.put(x, 0, " %s " % shown, *S["sel"])
+                if hot >= 0:
+                    cv.put(x + 1 + hot, 0, shown[hot], *S["selhot"])
+            else:
+                cv.put(x + 1, 0, shown)
+                if hot >= 0:
+                    cv.put(x + 1 + hot, 0, shown[hot], *S["barhot"])
+            x += len(shown) + 2
+        self._status(cv, g, S, bar)
+
+        if self.menu is not None and self.opened:
+            items = self.menus[self.menu][2]
+            mark = self.menus[self.menu][0] == "Theme"
+            inner = max(len(it[0]) + (len(it[2]) + 2 if it[2] else 0) for it in items if it) + 2 + (2 if mark else 0)
+            mx, my, mw, mh = xs[self.menu] - 1, 1, inner + 4, len(items) + 2     # a blank column outside the frame
+            cv.shade(mx + 2, my + 1, mw, mh, *T["shadow"])
+            cv.fill(mx, my, mw, mh, " ", *S["menu"])
+            cv.put(mx + 1, my, g["stl"] + g["sh"] * inner + g["str"])
+            cv.put(mx + 1, my + mh - 1, g["sbl"] + g["sh"] * inner + g["sbr"])
+            for i, it in enumerate(items):
+                y = my + 1 + i
+                if it is None:
+                    cv.put(mx + 1, y, g["stee"] + g["sh"] * inner + g["etee"])
+                    continue
+                cv.put(mx + 1, y, g["sv"])
+                cv.put(mx + mw - 2, y, g["sv"])
+                lead = (((g["dot"] if it[0] == self.theme else " ") + " ") if mark else "")
+                row = " " + lead + it[0]
+                row += " " * (inner - len(row))
+                if it[2]:
+                    row = row[:inner - 1 - len(it[2])] + it[2] + " "
+                chosen = i == self.item
+                cv.put(mx + 2, y, row, *(S["sel"] if chosen else S["menu"]))
+                if it[1] >= 0:
+                    cv.put(mx + 3 + len(lead) + it[1], y, it[0][it[1]], *(S["selhot"] if chosen else S["menuhot"]))
+
+        d = self.dialog
+        if d:
+            err = d["tone"] == "err" and S["err"]
+            body = S["err"] if err else S["dlg"]
+            frame = S["err"] if err else S["frame"]
+            btn, btnhot = (body, S["errhot"]) if err else (S["btn"], S["btnhot"])
+            focus, focushot = (S["errfocus"], S["errfocus"]) if err else (S["focus"], S["focushot"])
+            buttons = {"confirm": [("Yes", 0), ("No", 0)], "input": [("OK", 0), ("Cancel", 0)],
+                       "info": [("OK", 0)]}[d["kind"]]
+            tv = S["buttons"] == "tv"
+            lines = list(d["lines"])
+            dw = max([len(s) for s in lines] + [len(d["title"]) + 4, 30]) + 6
+            dh = len(lines) + (7 if d["kind"] == "input" else 5) + (1 if tv else 0)
+            dx, dy = (W - dw) // 2, max(2, (H - dh) // 2 - 2)
+            cv.window(dx, dy, dw, dh, d["title"], body, T["shadow"], g, frame=frame)
+            if S["closebox"]:
+                cv.put(dx + 2, dy, "[" + g["box"] + "]", *frame)
+                cv.put(dx + 3, dy, g["box"], *S["icon"])
+            for i, s in enumerate(lines):
+                cv.put(dx + 3, dy + 2 + i, s, *body)
+            y = dy + 2 + len(lines)
+            if d["kind"] == "input":
+                cv.put(dx + 3, y, " " * 6, *S["input"])
+                cv.put(dx + 4, y, d["value"], *(S["inputsel"] if d["fresh"] else S["input"]))
+                if not d["fresh"]:                  # a block cursor after the typed text
+                    cv.put(dx + 4 + len(d["value"]), y, " ", S["input"][1] - 10, S["input"][0] + 10)
+                cv.put(dx + 11, y, _clip(d["error"], dw - 14), *body)
+                y += 2
+            else:
+                y += 1
+            shown = []
+            for i, (label, hot) in enumerate(buttons):
+                if tv:
+                    text = label.center(10)
+                elif S["buttons"] == "far":         # FAR marks the default button with braces
+                    text = ("{ %s }" if i == d["default"] else "[ %s ]") % label
+                else:
+                    text = "< %s >" % label
+                shown.append((text, text.index(label) + hot))
+            x = dx + (dw - sum(len(t) for t, _ in shown) - 2 * (len(shown) - 1)) // 2
+            for i, (text, hot) in enumerate(shown):
+                on = i == d["focus"]
+                cv.put(x, y, text, *(focus if on else btn))
+                cv.put(x + hot, y, text[hot], *(focushot if on else btnhot))
+                if tv:                              # half-block shadow to the right and below
+                    cv.put(x + len(text), y, g["lower"], 30, body[1])
+                    cv.put(x + 1, y + 1, g["upper"] * len(text), 30, body[1])
+                elif S["buttons"] == "cua" and i == d["default"] and not on:
+                    cv.put(x, y, "<", *S["btnhot"])        # the default button's brackets are bright
+                    cv.put(x + len(text) - 1, y, ">", *S["btnhot"])
+                x += len(text) + 2
 
 
 def _watch(args, color, theme):
     import shutil
     _enable_vt()
+    glyphs = _ASC if (args.ascii or not color) else _UNI
+    ui = _Ui(args.data_dir, theme)
+    hist, hist_at = None, -math.inf
     sys.stdout.write("\x1b[?1049h\x1b[?25l")               # alternate screen, hide cursor
     try:
-        while True:
+        while not ui.quit:
             st, age = read_status(args.data_dir)
+            ui.st, ui.age = st, age
             size = shutil.get_terminal_size((80, 30))
             if st is None:
                 frame = "\x1b[2Jwaiting for the helper to write status..."
             else:
-                frame = _dashboard(st, age, size[1], color, size, args.ascii, "T theme Q quit", theme,
-                                   load_history(args.data_dir))
+                if time.monotonic() - hist_at > 5:          # the charts need not be re-read on every key
+                    hist, hist_at = load_history(args.data_dir), time.monotonic()
+                cv = _compose(st, age, size[1], glyphs, size, "", ui.theme, hist)
+                ui.draw(cv, glyphs)
+                frame = cv.render(color)
             sys.stdout.write("\x1b[H" + frame)
             sys.stdout.flush()
             deadline = time.monotonic() + args.watch
-            while time.monotonic() < deadline:
-                keys = _keys()
-                if "q" in keys:
-                    return 0
-                if "t" in keys:
-                    theme = THEME_ORDER[(THEME_ORDER.index(theme) + 1) % len(THEME_ORDER)]
-                    save_theme(args.data_dir, theme)
-                    break
-                time.sleep(0.05)
+            used = False
+            while time.monotonic() < deadline and not used:
+                for k in _read_keys():
+                    used = ui.key(k) or used
+                if not used:
+                    time.sleep(0.05)
     except KeyboardInterrupt:
         pass
     finally:
@@ -1582,6 +2146,32 @@ def cmd_attach(args):
     return 0 if ok else 1
 
 
+def cmd_clear_faults(args):
+    st, age = read_status(args.data_dir)
+    if st is None or age >= 30:
+        print("the helper is not running; nothing was sent")
+        return 1
+    n = st["watchdog"].get("module_faults")
+    if not args.yes:
+        ask = "Clear the charger's fault log (%s of 8)? [y/N] " % ("?" if n is None else n)
+        if input(ask).strip().lower() not in ("y", "yes"):
+            print("left as it is")
+            return 0
+    path = os.path.join(args.data_dir, "helper.json")
+    Config.update(path, clear_faults=wall())
+    print("asked the running helper to clear it (up to 30 s)...")
+    end = time.time() + 30                      # the helper removes the request once it has handled it
+    while time.time() < end and "clear_faults" in Config(path).get():
+        time.sleep(1)
+    if "clear_faults" in Config(path).get():
+        Config.drop(path, "clear_faults")
+        print("the running helper did not pick the request up (an older copy?); request withdrawn")
+        return 1
+    ok = _wait_for(args.data_dir, lambda s: s["watchdog"].get("module_faults") == 0, 20)
+    print("cleared: 0 of 8" if ok else "not cleared; see helper.log")
+    return 0 if ok else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default=default_data_dir(),
@@ -1601,6 +2191,8 @@ def main(argv=None):
     p.add_argument("amps", type=int, choices=range(J1772_MIN, HARD_MAX + 1), metavar="AMPS")
     sub.add_parser("release", help="hand the charger back to the cloud and stop reattaching")
     sub.add_parser("attach", help="resume local control")
+    p = sub.add_parser("clear-faults", help="clear the module's fault log (asks first)")
+    p.add_argument("--yes", action="store_true", help="do not ask")
     args = ap.parse_args(argv)
     if args.cmd == "run":
         try:
@@ -1609,7 +2201,7 @@ def main(argv=None):
             log.exception("helper crashed")
             raise
     return {"status": cmd_status, "target": cmd_target, "release": cmd_release,
-            "attach": cmd_attach}[args.cmd](args)
+            "attach": cmd_attach, "clear-faults": cmd_clear_faults}[args.cmd](args)
 
 
 if __name__ == "__main__":
