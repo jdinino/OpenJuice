@@ -29,6 +29,12 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
+// Windows shows these beside the exe's icon: on notifications, in Task Manager and in Explorer.
+[assembly: System.Reflection.AssemblyTitle("OpenJuice Monitor")]
+[assembly: System.Reflection.AssemblyProduct("OpenJuice")]
+[assembly: System.Reflection.AssemblyDescription("Status window and tray icon for the JuiceBox helper")]
+[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+
 namespace OpenJuice
 {
     struct Cell { public char Ch; public int Fg, Bg; }
@@ -148,11 +154,27 @@ namespace OpenJuice
         }
     }
 
-    // The window, taskbar and tray icon, drawn from the charger state. A J1772 handle sits inside
-    // a circle made by its own cord. The tile colour is the state (grey-blue unplugged, blue plugged
-    // in, green charging, red error, amber no telemetry) and the circle is a gauge: the bright part
-    // of it is the amps the vehicle is drawing, out of the circuit rating. It shows load, as Task
-    // Manager's icon does; the charger does not know the battery's state of charge.
+    // Every icon the monitor shows, drawn in code from the charger state. The reasoning:
+    //
+    // - It shows load, as Task Manager's icon does. The charger knows the amps going to the vehicle
+    //   and nothing about the battery, so no icon suggests a state of charge or a percentage.
+    // - The tile colour is the state, because colour is all that survives at a glance or at 16 px:
+    //   grey-blue unplugged, bright blue plugged in and idle, deep green charging, red error, and
+    //   amber when there is no fresh telemetry (worth noticing, but not the charger reporting a fault).
+    //   Amber is drawn in dark ink because white does not read on it.
+    // - The picture is a J1772 handle inside a circle made by its own cord (after the owner's sketch).
+    //   Plugged in, the nose meets a wall; unplugged, the handle is free and shows its head and the
+    //   latch hook. The latch, head and wall are black so they stand apart from the white handle.
+    // - The cord circle is the gauge: the bright green part is the amps out of the circuit rating
+    //   (40 A). The rating, not the 26 A cap, so that a normal charge does not sit at a full circle.
+    //   The charging tile is a deep green so that bright arc stands out.
+    // - Under 24 px (tray, title bar) the drawing is unreadable, so the tile carries one mark instead:
+    //   the amps while charging, 0 idle, u unplugged, ! error, ? no telemetry.
+    // - From 48 px there is room for both, so the same mark sits in the lower left corner.
+    // - The exe's own file icon (Explorer, shortcuts, the notification's app icon) cannot change, so
+    //   it is the charging picture with no mark.
+    // - Notifications get their own picture, since by then the state has moved on: a bright green
+    //   tile marked C for a finished charge, the red tile marked ! for an error.
     static class StateIcon
     {
         [DllImport("user32.dll")]
@@ -204,7 +226,7 @@ namespace OpenJuice
         // What the number-only tray icon says: the amps, or a mark when there are none to show.
         static string SmallText(string kind, double amps)
         {
-            return kind == "error" ? "!" : kind == "stale" ? "?" : kind == "unplugged" ? "u"
+            return kind == "complete" ? "C" : kind == "error" ? "!" : kind == "stale" ? "?" : kind == "unplugged" ? "u"
                  : Math.Round(kind == "charging" ? amps : 0).ToString("0", CultureInfo.InvariantCulture);
         }
 
@@ -253,7 +275,8 @@ namespace OpenJuice
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             GraphicsState saved = g.Save();
             g.ScaleTransform(size / 32f, size / 32f);
-            Color tile = kind == "charging" ? Color.FromArgb(12, 100, 34) : kind == "idle" ? Color.FromArgb(24, 132, 255)
+            Color tile = kind == "complete" ? Color.FromArgb(34, 197, 68)      // only on the charge-complete notification
+                       : kind == "charging" ? Color.FromArgb(12, 100, 34) : kind == "idle" ? Color.FromArgb(24, 132, 255)
                        : kind == "error" ? Color.FromArgb(205, 44, 36) : kind == "unplugged" ? Color.FromArgb(92, 104, 120)
                        : Color.FromArgb(255, 176, 0);        // no telemetry: amber, drawn in dark ink
             Color ink = kind == "stale" ? Color.FromArgb(28, 30, 34) : Color.FromArgb(250, 251, 252);
@@ -286,7 +309,7 @@ namespace OpenJuice
                 }
                 else g.DrawBezier(track, Cord[0], Cord[1], Cord[2], Cord[3]);
                 g.FillPolygon(b, Body);
-                bool plugged = kind == "idle" || kind == "charging" || kind == "error";
+                bool plugged = kind == "idle" || kind == "charging" || kind == "error" || kind == "complete";
                 using (SolidBrush black = new SolidBrush(Color.FromArgb(12, 14, 16)))
                 {
                     if (plugged) g.FillRectangle(black, 523, 196, 36, 290);   // the wall it is plugged into
@@ -316,6 +339,18 @@ namespace OpenJuice
             return bmp;
         }
 
+        // The picture on a notification: the drawing, large, with its mark in the corner ("C" on bright
+        // green for a finished charge, "!" on red for an error).
+        public static Icon MakeToast(string kind)
+        {
+            using (Bitmap bmp = Render(kind, 0, 40, 64, false))
+            {
+                IntPtr h = bmp.GetHicon();
+                try { return (Icon)Icon.FromHandle(h).Clone(); }
+                finally { DestroyIcon(h); }
+            }
+        }
+
         // The tray icon: the number alone, at whatever size the tray uses.
         public static Icon MakeTray(string kind, double amps, int rating)
         {
@@ -342,6 +377,14 @@ namespace OpenJuice
         {
             Plain = true;
             try { File.WriteAllBytes(path, IcoBytes("charging", 26, 40, new int[] { 16, 24, 32, 48, 64, 256 }, false)); }
+            finally { Plain = false; }
+        }
+
+        // The same picture as a 256 px PNG, for the notification identity (see Identity).
+        public static void SaveFilePng(string path)
+        {
+            Plain = true;
+            try { using (Bitmap bmp = Render("charging", 26, 40, 256, false)) bmp.Save(path, ImageFormat.Png); }
             finally { Plain = false; }
         }
 
@@ -391,8 +434,8 @@ namespace OpenJuice
         public static void Sheet(string path)
         {
             string[] rows = { "unplugged", "idle (plugged in)", "charging 6 A of 40", "charging 16 A of 40", "charging 26 A of 40",
-                              "charging 40 A of 40", "error", "stale (no telemetry)" };
-            double[] amps = { 0, 0, 6, 16, 26, 40, 0, 0 };
+                              "charging 40 A of 40", "error", "stale (no telemetry)", "complete (notification only)" };
+            double[] amps = { 0, 0, 6, 16, 26, 40, 0, 0, 0 };
             using (Bitmap bmp = new Bitmap(680, rows.Length * 80))
             using (Graphics g = Graphics.FromImage(bmp))
             using (Font f = new Font("Segoe UI", 10f))
@@ -432,6 +475,33 @@ namespace OpenJuice
                 }
                 big.Save(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFileNameWithoutExtension(path) + "_256.png"), ImageFormat.Png);
             }
+        }
+    }
+
+    // How Windows names the monitor and which icon it puts beside that name on a notification. A
+    // plain exe gets a generic icon there even when it carries its own, so the monitor registers an
+    // identity for itself: a name and a picture it writes out, both produced by this exe.
+    static class Identity
+    {
+        const string Id = "OpenJuice.Monitor";
+
+        [DllImport("shell32.dll")]
+        static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string id);
+
+        public static void Register(string dataDir)
+        {
+            try
+            {
+                string png = Path.Combine(dataDir, "OpenJuiceMonitor.png");
+                StateIcon.SaveFilePng(png);
+                using (RegistryKey k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\AppUserModelId\" + Id))
+                {
+                    k.SetValue("DisplayName", "OpenJuice Monitor");
+                    k.SetValue("IconUri", png);
+                }
+                SetCurrentProcessExplicitAppUserModelID(Id);
+            }
+            catch (Exception) { }                               // cosmetic: never stop the monitor over it
         }
     }
 
@@ -918,6 +988,7 @@ namespace OpenJuice
             menu.Items.Add(themes);
             menu.Items.Add(chimeItem);
             menu.Items.Add(new ToolStripMenuItem("Test chime", null, delegate { Chime(null); }));
+            menu.Items.Add(new ToolStripMenuItem("Test error notification", null, delegate { lastKind = null; Watch("error"); }));
             startupItem = new ToolStripMenuItem("Start with Windows, in the tray") { CheckOnClick = true, Checked = AutoStart.Enabled };
             startupItem.Click += delegate { AutoStart.Set(startupItem.Checked); startupItem.Checked = AutoStart.Enabled; };
             menu.Items.Add(startupItem);
@@ -979,13 +1050,84 @@ namespace OpenJuice
             Refresh1();
         }
 
+        [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
+        static extern bool PlaySound(string sound, IntPtr module, uint flags);
+
         void Chime(double? wh)
         {
-            try { new SoundPlayer(@"C:\Windows\Media\tada.wav").Play(); } catch (Exception) { SystemSounds.Asterisk.Play(); }
+            // Windows' "Print Complete" sound: whatever is assigned to that event in Sound settings, else
+            // the stock file (the event ships with nothing assigned), else the notification sound.
+            const uint SND_ASYNC = 0x1, SND_NODEFAULT = 0x2, SND_ALIAS = 0x10000, SND_FILENAME = 0x20000;
+            string stock = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"Media\Windows Print complete.wav");
+            bool played = false;
+            try
+            {
+                played = PlaySound("PrintComplete", IntPtr.Zero, SND_ALIAS | SND_ASYNC | SND_NODEFAULT)
+                      || (File.Exists(stock) && PlaySound(stock, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
+                      || PlaySound("Notification.Default", IntPtr.Zero, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
+            }
+            catch (Exception) { }
+            if (!played) SystemSounds.Asterisk.Play();
             string msg = wh.HasValue && wh.Value > 0
                 ? "Charge complete: " + (wh.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " kWh delivered."
                 : "Charge complete.";
-            tray.ShowBalloonTip(8000, "OpenJuice", msg, ToolTipIcon.Info);
+            Toast("Charge complete", msg, "complete");
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct NOTIFYICONDATA
+        {
+            public int cbSize; public IntPtr hWnd; public int uID, uFlags, uCallbackMessage; public IntPtr hIcon;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+            public int dwState, dwStateMask;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+            public int uVersion;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+            public int dwInfoFlags; public Guid guidItem; public IntPtr hBalloonIcon;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        static extern bool Shell_NotifyIcon(int message, ref NOTIFYICONDATA data);
+
+        Icon toastIcon;
+
+        // A notification carrying the state picture, not a stock "i" icon. WinForms cannot pass a custom
+        // picture, so this talks to the shell directly, and falls back to WinForms if that fails.
+        void Toast(string title, string msg, string kind)
+        {
+            try
+            {
+                System.Reflection.BindingFlags priv = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                NativeWindow win = (NativeWindow)typeof(NotifyIcon).GetField("window", priv).GetValue(tray);
+                int id = (int)typeof(NotifyIcon).GetField("id", priv).GetValue(tray);
+                Icon old = toastIcon;
+                toastIcon = StateIcon.MakeToast(kind);
+                NOTIFYICONDATA d = new NOTIFYICONDATA();
+                d.cbSize = Marshal.SizeOf(typeof(NOTIFYICONDATA));
+                d.hWnd = win.Handle; d.uID = id;
+                d.uFlags = 0x10;                                 // NIF_INFO
+                d.szInfoTitle = title; d.szInfo = msg; d.szTip = "";
+                d.dwInfoFlags = 0x4 | 0x10 | 0x20;               // our picture, our own sound, large
+                d.hBalloonIcon = toastIcon.Handle;
+                bool ok = Shell_NotifyIcon(1, ref d);            // NIM_MODIFY
+                if (old != null) old.Dispose();
+                if (ok) return;
+            }
+            catch (Exception) { }
+            tray.ShowBalloonTip(8000, title, msg, ToolTipIcon.None);
+        }
+
+        string lastKind;
+
+        // Called with each fresh state: say so once when the charger goes into its error state.
+        void Watch(string kind)
+        {
+            if (kind == "error" && lastKind != "error")
+            {
+                SystemSounds.Hand.Play();
+                Toast("Charger error", "The JuiceBox reports an error state and is not charging.", "error");
+            }
+            lastKind = kind;
         }
 
         void Refresh1()
@@ -1012,6 +1154,7 @@ namespace OpenJuice
                     string tip = "OpenJuice: " + Screen.StateName(s) + ", " + (J.I(f, "A", 0) / 10.0).ToString("0.0", CultureInfo.InvariantCulture) + " A";
                     tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
                     SetIcon(StateIcon.KindOf(s, true), J.I(f, "A", 0) / 10.0, J.I(f, "m", 40));
+                    Watch(StateIcon.KindOf(s, true));
                 }
                 else { tray.Text = "OpenJuice: no fresh telemetry"; SetIcon("stale", 0, 40); }
             }
@@ -1211,6 +1354,7 @@ namespace OpenJuice
             using (System.Threading.Mutex one = new System.Threading.Mutex(true, "OpenJuiceMonitor.single", out created))
             {
                 if (!created) return 0;                         // already running: its icon is in the tray
+                Identity.Register(dir);
                 Application.Run(new MonitorForm(dir, Array.IndexOf(args, "--tray") >= 0));
             }
             return 0;

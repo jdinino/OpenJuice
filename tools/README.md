@@ -96,6 +96,38 @@ When a charge finishes (charging, then idle for 30 s, with at least 0.1 kWh deli
 writes `charge complete` to `helper.log` and the Event log, and the screen shows the time and energy
 on the `Finished` row and a marker on the current chart.
 
+#### The monitor's icons
+
+The desktop monitor draws its icon from the charger's state. It shows load, as Task Manager's icon
+does: the charger knows the amps going to the vehicle and nothing about the battery, so nothing here
+is a state of charge.
+
+| State | Tile | Tray mark | Picture (taskbar and larger) |
+|---|---|---|---|
+| Unplugged | grey-blue | `u` | free handle with its head and latch hook |
+| Plugged in, idle | bright blue | `0` | handle against a wall |
+| Charging | deep green | the amps, e.g. `26` | handle against a wall; the cord circle lights bright green in proportion to the amps |
+| Error | red | `!` | handle against a wall |
+| No fresh telemetry | amber, dark ink | `?` | free handle |
+
+- **Colour is the state**, because colour is what survives at a glance and at 16 px. Amber means
+  "worth noticing" rather than a fault the charger reported, which is red.
+- **The cord circle is the gauge**, measured against the circuit rating (40 A) rather than the 26 A
+  cap, so a normal charge does not sit at a full circle.
+- **The tray shows a mark, not the drawing**, which is unreadable under 24 px. From 48 px the mark
+  also sits in the corner of the drawing.
+- **Notifications have their own picture**: bright green marked `C` when a charge completes (with
+  Windows' Print Complete sound, which `build_monitor.ps1` assigns if it is unset), red marked `!`
+  when the charger enters its error state.
+- **The exe's file icon** cannot change, so it is the charging picture with no mark. Regenerate
+  `OpenJuiceMonitor.ico` with `OpenJuiceMonitor.exe --file-icon` after changing the drawing;
+  `--icons out.png` draws every state for review.
+
+The monitor registers a name and icon for its notifications under
+`HKCU\Software\Classes\AppUserModelId\OpenJuice.Monitor` each time it starts, because Windows does
+not take a notification's app icon from the exe. `build_monitor.ps1 -Shortcut` adds a Start menu
+shortcut.
+
 The chosen theme is kept in `ui.json` and shared by the terminal screen and the desktop monitor.
 The theme table exists in both `juicebox_helper.py` and `OpenJuiceMonitor.cs`; change both together.
 
