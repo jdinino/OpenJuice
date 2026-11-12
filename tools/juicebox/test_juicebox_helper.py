@@ -404,6 +404,26 @@ class TestSockets(unittest.TestCase):
         self.assertRegex(cmd, r"^CMD\d{5}A26M26C006S682!\w+\$$")  # listener survived and still corrects
         self.assertEqual(self.shared.frames, 2)               # both frames counted, neither crashed it
 
+    def test_listener_notes_a_finished_charge(self):
+        port = free_udp_port()
+        tlog = h.TelemetryLog(os.path.join(tempfile.mkdtemp(), "telemetry.log"))
+        watch = h.ChargeWatch()
+        watch.CONFIRM = 0.2                                    # seconds of idle that confirm it
+        threading.Thread(target=h.listener_loop,
+                         args=(self.shared, lambda: self.cfg, h.LimitKeeper(self.shared.note), tlog, self.stop),
+                         kwargs={"port": port, "watch": watch}, daemon=True).start()
+        time.sleep(0.3)
+        charger = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(charger.close)
+        frame = "0817081001070449032218248303:v07,s0001,u1,V2400,L%010d,S%s,T15,M26,m40%s!XYZ:"
+        for state, extra in (("2", ",E004200,A0257"), ("1", ""), ("1", ""), ("1", "")):
+            charger.sendto((frame % (5200, state, extra)).encode(), ("127.0.0.1", port))
+            time.sleep(0.25)
+        self.assertEqual(self.shared.last_complete["wh"], 4200)       # the charger's own session counter
+        notes = [e["msg"] for e in self.shared.events if "charge complete" in e["msg"]]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("4.2 kWh delivered", notes[0])
+
 
 class TestConfig(unittest.TestCase):
     def test_update_validates_and_reloads(self):
@@ -488,7 +508,7 @@ class TestStatusScreen(unittest.TestCase):
         text = h._dashboard(self.snapshot(), 2, 8, color=False)
         self.assertNotIn("\x1b", text)
         text.encode("ascii")                                   # no box-drawing when colour is off
-        self.assertEqual(len(text.split("\n")), 31)
+        self.assertEqual(len(text.split("\n")), 32)
         for needle in ("CHARGING", "25.7 A", "3/8", "RUNNING", "12.785 kWh", "-71 dBm"):
             self.assertIn(needle, text)
 
@@ -525,6 +545,57 @@ class TestStatusScreen(unittest.TestCase):
         self.assertIn("Energy per day", text)
         self.assertIn("#", text.split("Current per minute")[1])        # a column was drawn
         self.assertIsNone(h.load_history(os.path.join(tmp, "missing")))
+
+    def test_finished_charge_is_marked(self):
+        import datetime
+        now = datetime.datetime.now()
+        done = {"t": now.isoformat(timespec="seconds"), "wh": 12345}
+        idle = {"telemetry": {"last": "2026-01-01T00:10:00", "age_s": 2, "frames": 9, "from": "192.168.1.63:5000",
+                              "fields": {"S": "1", "M": "26", "m": "40", "V": "2440", "T": "15", "L": "0029163065"}}}
+        text = h._dashboard(self.snapshot(charge={"last_complete": done}, **idle), 2, 8, hist={"amps": {}, "days": []})
+        self.assertIn("Session", h._dashboard(self.snapshot(charge={"last_complete": done}), 2, 8))   # while charging
+        self.assertIn("Finished  %s  12.3 kWh" % now.strftime("%H:%M"), text)
+        self.assertIn("v", text.split("Current per minute")[1].split("\n")[7])     # marker on the time axis
+        old = h._dashboard(self.snapshot(charge={"last_complete": {"t": "2026-01-01T07:42:10", "wh": None}}, **idle), 2, 8)
+        self.assertIn("Finished  01-01 07:42", old)
+        for st in (self.snapshot(**idle), self.snapshot(charge=None, **idle),
+                   self.snapshot(charge={"last_complete": "x"}, **idle)):
+            self.assertIn("no charge seen yet", h._dashboard(st, 2, 8))
+
+
+class TestChargeWatch(unittest.TestCase):
+    def feed(self, w, frames):
+        import datetime
+        t0 = datetime.datetime(2026, 1, 1, 22, 0, 0)
+        return [d for d in (w.observe(t0 + datetime.timedelta(seconds=s), state, l)
+                            for s, state, l in frames) if d]
+
+    def test_charge_then_idle_completes_once(self):
+        w = h.ChargeWatch()
+        got = self.feed(w, [(0, "2", 1000), (9, "2", 5000), (18, "1", 5200), (27, "1", 5200),
+                            (36, "1", 5200), (48, "1", 5200), (57, "1", 5200)])
+        self.assertEqual(got, [{"t": "2026-01-01T22:00:18", "wh": 4200}])
+        self.assertEqual(w.last, got[0])
+
+    def test_blip_unplug_gap_and_cold_start_do_not(self):
+        self.assertEqual(self.feed(h.ChargeWatch(), [(0, "2", 1000), (9, "1", 1010), (50, "1", 1010)]), [])
+        self.assertEqual(self.feed(h.ChargeWatch(), [(0, "2", 1000), (9, "0", 9000), (18, "1", 9000),
+                                                     (60, "1", 9000)]), [])
+        self.assertEqual(self.feed(h.ChargeWatch(), [(0, "2", 1000), (300, "1", 9000), (340, "1", 9000)]), [])
+        self.assertEqual(self.feed(h.ChargeWatch(), [(0, "1", 1000), (40, "1", 1000)]), [])
+
+    def test_seed_replays_the_log(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "telemetry.log")
+        frame = "2026-01-01T22:00:%02d.5\t192.168.1.63\t0817:v07,s0001,V2400,L%010d,S%s,M26,m40,A0000!XYZ:\n"
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("a line cut in half by the tail seek\n")
+            for s, state, l in [(0, "2", 1000), (9, "2", 5000), (18, "1", 5200), (27, "1", 5200), (50, "1", 5200)]:
+                f.write(frame % (s, l, state))
+        w = h.ChargeWatch()
+        w.seed(path)
+        self.assertEqual(w.last, {"t": "2026-01-01T22:00:18", "wh": 4200})
+        w.seed(os.path.join(tmp, "missing"))                       # no log yet: nothing to do
 
 
 if __name__ == "__main__":

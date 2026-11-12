@@ -61,7 +61,7 @@ Wire format: [../docs/juicebox/JuiceNet-Protocol.md](../docs/juicebox/JuiceNet-P
 | `read_counters.py` | Read-only snapshot: uptime, module fault count, lifetime energy, 5-minute history, session events | No |
 | `juicebox_rawcap.py` | Legacy Npcap method: captures telemetry in transit to the real cloud and spoofs the cloud's reply. Needs Npcap and scapy, and the charger's gateway pointed at this PC | Only with `--send` |
 | `charge_notifier.py` | Plays a Windows sound when a charge completes (charging, then idle, with at least 0.1 kWh delivered). Reads `status.json` only. `watch`, `test-sound`, `replay LOG` | No |
-| `monitor/OpenJuiceMonitor.cs` | Desktop window and tray icon showing the same themed status screen as `status --watch`, with a charge-complete chime. Reads `status.json` only. Build with `monitor/build_monitor.ps1` (uses the C# compiler that ships with Windows) | No |
+| `monitor/OpenJuiceMonitor.cs` | Desktop window and tray icon showing the same themed status screen as `status --watch`, with a charge-complete chime. Its icon follows the charger: tile colour is the state, the cord circle is a gauge of amps against the circuit rating, and the tray shows the amps as a number. Reads `status.json` only. Build with `monitor/build_monitor.ps1` (uses the C# compiler that ships with Windows) | No |
 | `avr_pinmap.py` | Hints at ATmega328P pin usage from a firmware image. **Corroboration only**: calibrated against V8.9 and found to miss the relay and GFI pins | No |
 
 ### Unattended: `juicebox_helper.py`
@@ -88,9 +88,13 @@ forces plain, `--ascii` keeps colour but avoids box-drawing characters):
 
 ```sh
 python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py status --watch 1       # live; T cycles themes, Q quits
-python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py status --theme amber   # turbo, commander, phosphor, amber, light
+python %LOCALAPPDATA%\OpenJuice\helper\juicebox_helper.py status --theme amber   # turbo, commander, pascal, midnight, ocean, phosphor, amber, light, hotdog, mono
 powershell -ExecutionPolicy Bypass -File tools\juicebox\monitor\build_monitor.ps1 -Run   # the desktop monitor
 ```
+
+When a charge finishes (charging, then idle for 30 s, with at least 0.1 kWh delivered) the helper
+writes `charge complete` to `helper.log` and the Event log, and the screen shows the time and energy
+on the `Finished` row and a marker on the current chart.
 
 The chosen theme is kept in `ui.json` and shared by the terminal screen and the desktop monitor.
 The theme table exists in both `juicebox_helper.py` and `OpenJuiceMonitor.cs`; change both together.

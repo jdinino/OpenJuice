@@ -234,6 +234,7 @@ class Shared:
         self.beacon_t = None
         self.beacon = {}
         self.events = collections.deque(maxlen=40)
+        self.last_complete = None      # {"t": iso, "wh": int or None}: the last finished charge
 
     def note(self, msg, level=logging.INFO):
         log.log(level, msg)
@@ -568,7 +569,74 @@ class TelemetryLog:
             self.f = None
 
 
-def listener_loop(shared, config, keeper, tlog, stop, port=8042):
+class ChargeWatch:
+    """Notices a finished charge: charging (S2), then idle (S1) held for CONFIRM seconds.
+
+    Same rules as charge_notifier.py, which cannot be imported here because only this file and
+    its two imports are installed. Under MIN_WH delivered is a blip, not a charge; a GAP in the
+    frames means the charge was not watched through, so nothing is claimed about it.
+    """
+    CONFIRM, GAP, MIN_WH = 30, 60, 100
+
+    def __init__(self):
+        self.armed = False
+        self.s1_since = self.last_t = self.arm_l = self.last_l = self.last_e = None
+        self.last = None
+
+    def observe(self, when, state, lifetime, session=None):
+        """Feed one frame. Returns {"t", "wh"} when a completion has just been confirmed.
+
+        The energy is the charger's own session counter (E, sent while charging) when it was
+        seen, else the rise in lifetime energy since this watch first saw the charge.
+        """
+        done = None
+        if self.last_t is not None and (when - self.last_t).total_seconds() > self.GAP:
+            self.armed, self.s1_since = False, None
+        self.last_t = when
+        if state == "2":
+            if not self.armed:
+                self.arm_l = lifetime if lifetime is not None else self.last_l
+                self.last_e = None
+            if session is not None:
+                self.last_e = session
+            self.armed, self.s1_since = True, None
+        elif state == "1":
+            if self.armed and self.s1_since is None:
+                self.s1_since = when
+            elif self.armed and (when - self.s1_since).total_seconds() >= self.CONFIRM:
+                wh = self.last_e
+                if wh is None and None not in (self.last_l, self.arm_l):
+                    wh = self.last_l - self.arm_l
+                if wh is None or wh >= self.MIN_WH:
+                    done = self.last = {"t": self.s1_since.isoformat(timespec="seconds"), "wh": wh}
+                self.armed, self.s1_since = False, None
+        else:
+            self.armed, self.s1_since = False, None
+        if lifetime is not None:
+            self.last_l = lifetime
+        return done
+
+    def seed(self, path, tail=4 * 1024 * 1024):
+        """Replay the end of telemetry.log, so a restart keeps the last completion and a charge
+        in progress stays armed with the energy it started at."""
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, f.seek(0, 2) - tail))
+                lines = f.read().decode("latin1").split("\n")[1:]
+        except OSError:
+            return
+        for s in lines:
+            if ":v" not in s:
+                continue
+            try:
+                when = datetime.datetime.fromisoformat(s[:19])
+            except ValueError:
+                continue
+            state = _field(s, "S")
+            self.observe(when, None if state is None else str(state), _field(s, "L"), _field(s, "E"))
+
+
+def listener_loop(shared, config, keeper, tlog, stop, port=8042, watch=None):
     s = bind_udp(port, stop, name="listener")
     if s is None:
         return
@@ -598,6 +666,14 @@ def listener_loop(shared, config, keeper, tlog, stop, port=8042):
                 if cmd:
                     s.sendto(cmd.encode(), addr)
                     shared.note("sent to %s:%d: %s" % (addr[0], addr[1], cmd))
+                done = watch and watch.observe(datetime.datetime.now(), r[2].get("S"),
+                                               _ival(r[2], "L", None), _ival(r[2], "E", None))
+                if done:
+                    with shared.lock:
+                        shared.last_complete = done
+                    shared.note("charge complete at %s%s" % (
+                        done["t"][11:], "" if done["wh"] is None else ", %.1f kWh delivered"
+                        % (done["wh"] / 1000.0)))
             except Exception:                # one bad frame must not kill telemetry + correction
                 if quiet_since is None or time.monotonic() - quiet_since > 600:
                     quiet_since = time.monotonic()
@@ -808,6 +884,7 @@ def write_status(path, shared, wd, keeper, config, started_wall):
                          "ignored": shared.dns_ignored},
             "beacon": shared.beacon,
             "limit": {"outcome": keeper.outcome, "corrections_24h": keeper.corrections_24h()},
+            "charge": {"last_complete": shared.last_complete},
             "events": list(shared.events),
         }
     tmp = path + ".tmp"
@@ -839,6 +916,9 @@ def run(args):
         "thread %s crashed", a.thread.name if a.thread else "?",
         exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
     stop = threading.Event()
+    watch = ChargeWatch()
+    watch.seed(os.path.join(data_dir, "telemetry.log"))
+    shared.last_complete = watch.last
     tlog = TelemetryLog(os.path.join(data_dir, "telemetry.log"))
     started_wall = wall()
     shared.note("helper %s starting (pid %d); mode %s, target %d A"
@@ -858,7 +938,7 @@ def run(args):
     threads = {
         "resolver": threading.Thread(target=resolver_loop, args=(shared, config, stop), daemon=True),
         "listener": threading.Thread(target=listener_loop, args=(shared, config, keeper, tlog, stop),
-                                     daemon=True),
+                                     kwargs={"watch": watch}, daemon=True),
         "beacon": threading.Thread(target=beacon_loop, args=(shared, config, stop), daemon=True),
     }
     for t in threads.values():
@@ -939,10 +1019,12 @@ def _hhmmss(iso):
 
 # ---- status TUI: a cell canvas themed after Turbo Vision / TuiCss ----
 _UNI = {"h": "═", "v": "║", "tl": "╔", "tr": "╗", "bl": "╚", "br": "╝",
-        "full": "█", "empty": "░", "desk": "░", "sep": "│",
-        "part": "▁▂▃▄▅▆▇"}
+        "full": "█", "empty": "░", "desk": "░", "sep": "│", "mark": "▼",
+        "part": "\u2581\u2582\u2583\u2584\u2585\u2586\u2587",
+        "hpart": "\u258f\u258e\u258d\u258c\u258b\u258a\u2589"}
 _ASC = {"h": "=", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+",
-        "full": "#", "empty": ".", "desk": " ", "sep": "|", "part": ""}
+        "full": "#", "empty": ".", "desk": " ", "sep": "|", "mark": "v",
+        "part": "", "hpart": ""}
 
 # Colours are ANSI SGR numbers: (fg, bg) pairs, or a lone fg. tools/juicebox/monitor/
 # OpenJuiceMonitor.cs carries the same table; change both together.
@@ -968,7 +1050,30 @@ THEMES = {
                   fill=92, fillbad=91, tick=93,
                   ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(97, 44), idle=(97, 100)),
 }
-THEME_ORDER = ["turbo", "commander", "phosphor", "amber", "light"]
+THEMES.update({
+    "pascal": dict(pattern=True, desk=(90, 47), bar=(30, 46), key=31, main=(93, 44), win=(97, 44),
+                   log=(93, 44), logtime=96, logtext=97, shadow=(90, 40), trough=(90, 40),
+                   fill=93, fillbad=91, tick=97,
+                   ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(30, 46), idle=(30, 47)),
+    "midnight": dict(pattern=True, desk=(90, 40), bar=(97, 45), key=93, main=(97, 100), win=(37, 100),
+                     log=(95, 40), logtime=95, logtext=37, shadow=(30, 40), trough=(90, 40),
+                     fill=95, fillbad=91, tick=93,
+                     ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(97, 45), idle=(30, 47)),
+    "ocean": dict(pattern=True, desk=(96, 46), bar=(97, 44), key=93, main=(30, 107), win=(30, 107),
+                  log=(97, 44), logtime=96, logtext=97, shadow=(90, 40), trough=(37, 100),
+                  fill=94, fillbad=91, tick=93,
+                  ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(97, 44), idle=(97, 100)),
+    "hotdog": dict(pattern=False, desk=(93, 41), bar=(97, 40), key=93, main=(30, 103), win=(30, 103),
+                   log=(93, 40), logtime=91, logtext=93, shadow=(30, 40), trough=(90, 40),
+                   fill=91, fillbad=97, tick=93,
+                   ok=(30, 42), warn=(97, 45), bad=(97, 41), info=(97, 44), idle=(97, 100)),
+    "mono": dict(pattern=False, desk=(37, 40), bar=(30, 47), key=30, main=(97, 40), win=(37, 40),
+                 log=(37, 40), logtime=97, logtext=37, shadow=(37, 40), trough=(90, 40),
+                 fill=37, fillbad=97, tick=97,
+                 ok=(30, 47), warn=(30, 107), bad=(30, 107), info=(30, 47), idle=(97, 40)),
+})
+THEME_ORDER = ["turbo", "commander", "pascal", "midnight", "ocean", "phosphor", "amber", "light",
+               "hotdog", "mono"]
 
 
 def load_theme(data_dir):
@@ -1014,7 +1119,7 @@ class _Canvas:
     def shade(self, x, y, w, h, fg, bg):
         for yy in range(max(0, y), min(self.h, y + h)):
             for xx in range(max(0, x), min(self.w, x + w)):
-                self.cells[yy][xx] = (self.cells[yy][xx][0], fg, bg)
+                self.cells[yy][xx] = (" ", fg, bg)
 
     def window(self, x, y, w, h, title, colors, shadow, g):
         fg, bg = colors
@@ -1150,7 +1255,7 @@ def load_history(data_dir, days=7):
         return None
 
 
-def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=None):
+def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=None):
     """Lay the status snapshot out as windows on a desktop. Returns a _Canvas."""
     T = THEMES.get(theme, THEMES["turbo"])
     W, H = max(80, size[0]), max(30, size[1])
@@ -1176,9 +1281,9 @@ def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=Non
         cv.put(x, H - 1, g["sep"])
         x += 2
 
-    ww = (W - 6) // 2
-    lx, rx, ty, th = 2, 2 + ww + 2, 2, 9
-    fw, cy, chh, by, bh = 2 * ww + 2, 12, 10, 23, H - 25    # charts row, then the Event log
+    ww = (W - 10) // 2                                      # leaves desktop around every shadow
+    lx, rx, ty, th = 2, 2 + ww + 4, 2, 9
+    fw, cy, chh, by, bh = 2 * ww + 4, 13, 9, 24, H - 26     # charts row, then the Event log
     iw = ww - 4                                             # text columns inside a window
     bw = iw - 17                                            # bar cells in a "label bar value" row
 
@@ -1227,6 +1332,9 @@ def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=Non
     cv.window(lx, ty, ww, th, "Charger", T["main"], T["shadow"], g)
     t = st["telemetry"]
     f = t["fields"]
+    done = (st.get("charge") or {}).get("last_complete")
+    if not (isinstance(done, dict) and isinstance(done.get("t"), str) and len(done["t"]) >= 16):
+        done = None
     cap, circ = _ival(f, "M"), _ival(f, "m", 40) or 40
     if t["last"]:
         sc = f.get("S")
@@ -1238,7 +1346,14 @@ def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=Non
         bar(lx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
         bar(lx, ty, 3, "Volts", v - 200, 60, "%.1f V" % v, bad=not 210 <= v <= 255)
         bar(lx, ty, 4, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
-        text(lx, ty, 5, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0) if "E" in f else "-")
+        if sc == "2" and "E" in f:                  # charging: this session so far
+            text(lx, ty, 5, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0))
+        elif done:                                  # otherwise the last finished charge: when, how much
+            when = done["t"][11:16] if done["t"][:10] == now.strftime("%Y-%m-%d") else done["t"][5:16]
+            chip(lx, ty, 5, "Finished", when.replace("T", " "), T["ok"],
+                 "" if done.get("wh") is None else " %.1f kWh" % (done["wh"] / 1000.0))
+        else:
+            text(lx, ty, 5, "Finished", "no charge seen yet")
         text(lx, ty, 6, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
     else:
         cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper started", iw))
@@ -1272,43 +1387,55 @@ def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=Non
     else:
         text(rx, ty, 5, "Signal", "no beacon")
     r = st["resolver"]
-    text(rx, ty, 6, "Resolver", "%d answers, last %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5]))
+    text(rx, ty, 6, "Resolver", "%d answers at %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5]))
 
     # --- Chart: current per minute --------------------------------------------------
     nb = iw - 3
     cv.window(lx, cy, ww, chh, "Current per minute, A", T["win"], T["shadow"], g)
-    bottom = cy + 7
+    bottom = cy + 6
     if hist:
         cv.put(lx + 2, cy + 1, "%2d" % circ)
         cv.put(lx + 2, bottom, " 0")
         if 0 < cap < circ:
-            cv.put(lx + 2, bottom - int(cap / circ * 7), "%2d" % cap)
+            cv.put(lx + 2, bottom - int(cap / circ * 6), "%2d" % cap)
         for i in range(nb):
             key = (now - datetime.timedelta(minutes=nb - 1 - i)).strftime("%Y-%m-%dT%H:%M")
             a = hist["amps"].get(key)
             if a:
-                column(lx + 5 + i, bottom, 7, a / circ, 1, T["fillbad"] if a > cap + 0.05 else T["fill"])
+                column(lx + 5 + i, bottom, 6, a / circ, 1, T["fillbad"] if a > cap + 0.05 else T["fill"])
             else:
                 cv.put(lx + 5 + i, bottom, "_" if a is not None else " ")
-        cv.put(lx + 5, cy + 8, "-%dm" % nb)
-        cv.put(lx + 5 + nb - 3, cy + 8, "now")
+        cv.put(lx + 5, cy + 7, "-%dm" % nb)
+        cv.put(lx + 5 + nb - 3, cy + 7, "now")
+        for i in range(nb):                         # mark the minute the charge finished
+            if done and (now - datetime.timedelta(minutes=nb - 1 - i)).strftime("%Y-%m-%dT%H:%M") == done["t"][:16]:
+                cv.put(lx + 5 + i, cy + 7, g["mark"], T["fill"])
     else:
         cv.put(lx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
     # --- Chart: energy per day ------------------------------------------------------
     cv.window(rx, cy, ww, chh, "Energy per day, kWh", T["win"], T["shadow"], g)
     if hist and hist["days"]:
-        days = hist["days"]
+        days = hist["days"][-(chh - 2):]
         top = max([k for _, k in days if k] or [1.0])
-        x0 = rx + 2 + max(0, (iw - 4 * len(days) + 1) // 2)
-        for i, (label, kwh) in enumerate(days):
-            xx = x0 + 4 * i
-            cv.put(xx, cy + 8, "%-3s" % label)
+        dbw, tbg = iw - 9, T["trough"][1]
+        for i, (label, kwh) in enumerate(days):                 # one horizontal bar per day
+            y = cy + 1 + i
+            cv.put(rx + 2, y, "%-2s" % label)
+            cv.put(rx + 5, y, g["empty"] * dbw, T["trough"][0], tbg)
             if kwh is None:
-                cv.put(xx, bottom, " - ")
+                cv.put(rx + 6 + dbw, y, "    -")
                 continue
-            row = column(xx, bottom, 5, kwh / top, 3, T["fill"]) if kwh > 0 else bottom + 1
-            cv.put(xx, row - 1, ("%.0f" % kwh if kwh >= 10 else "%.1f" % kwh).center(3))
+            eighths = int(round(kwh / top * dbw * 8))
+            if kwh > 0 and eighths == 0:
+                eighths = 1
+            full, part = divmod(eighths, 8)
+            cv.put(rx + 5, y, g["full"] * full, T["fill"], tbg)
+            if part and g["hpart"]:
+                cv.put(rx + 5 + full, y, g["hpart"][part - 1], T["fill"], tbg)
+            elif part >= 4:
+                cv.put(rx + 5 + full, y, g["full"], T["fill"], tbg)
+            cv.put(rx + 6 + dbw, y, "%5.1f" % kwh)
     else:
         cv.put(rx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
@@ -1321,7 +1448,7 @@ def _compose(st, age, events, g, size=(80, 31), hint="", theme="turbo", hist=Non
     return cv
 
 
-def _dashboard(st, age, events, color=False, size=(80, 31), ascii_only=False, hint="", theme="turbo",
+def _dashboard(st, age, events, color=False, size=(80, 32), ascii_only=False, hint="", theme="turbo",
                hist=None):
     """The status screen as text: themed and full-colour, or plain ASCII when color is off."""
     glyphs = _ASC if (ascii_only or not color) else _UNI
