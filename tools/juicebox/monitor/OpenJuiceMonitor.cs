@@ -11,6 +11,7 @@
 //
 //   OpenJuiceMonitor.exe                         run the monitor
 //   OpenJuiceMonitor.exe --tray                  run it hidden in the tray (what "Start with Windows" uses)
+//   OpenJuiceMonitor.exe --smooth                draw text in Consolas instead of the Windows DOS-box bitmap font
 //   OpenJuiceMonitor.exe --snapshot out.png [theme [datadir]]   draw one frame to a PNG and exit
 //   OpenJuiceMonitor.exe --icons out.png         draw every state icon to a PNG and exit
 //   OpenJuiceMonitor.exe --file-icon out.ico     write the exe's own icon (16 to 256 px); build_monitor.ps1 embeds it
@@ -90,6 +91,11 @@ namespace OpenJuice
                 Main = P(97, 40), Win = P(37, 40), Log = P(37, 40), LogTime = 97, LogText = 37,
                 Shadow = P(37, 40), Trough = P(90, 40), Fill = 37, FillBad = 97, Tick = 97,
                 Ok = P(30, 47), Warn = P(30, 107), Bad = P(30, 107), Info = P(30, 47), Idle = P(97, 40) },
+            // Microsoft Visual Basic for MS-DOS 1.0, after its programming environment; see the Python table.
+            new Theme { Name = "vbdos", Pattern = true, Desk = P(37, 40), Bar = P(30, 47), Key = 97,
+                Main = P(30, 47), Win = P(30, 47), Log = P(37, 44), LogTime = 97, LogText = 37,
+                Shadow = P(90, 40), Trough = P(30, 47), Fill = 30, FillBad = 31, Tick = 97,
+                Ok = P(30, 42), Warn = P(30, 43), Bad = P(97, 41), Info = P(30, 46), Idle = P(37, 40) },
         };
 
         public static int IndexOf(string name)
@@ -107,6 +113,8 @@ namespace OpenJuice
         public const char SH = '\u2500', STL = '\u250c', STR = '\u2510', SBL = '\u2514', SBR = '\u2518', DOT = '\u2022';
         // A dialog's close box, and the half blocks of a button's shadow.
         public const char BOX = '\u25a0', LOWER = '\u2584', UPPER = '\u2580';
+        // Tees that join a title bar to a single-line frame.
+        public const char STEE = '\u251c', ETEE = '\u2524';
         public readonly int W, Hgt;
         public readonly Cell[,] C;
 
@@ -139,24 +147,22 @@ namespace OpenJuice
             for (int yy = y; yy < y + h; yy++) Put(x, yy, s, fg, bg);
         }
 
-        // A drop shadow, as Turbo Vision casts it: the cells keep their characters and only change
-        // colour. Dark grey on black would vanish on a black cell, so that one is reversed.
+        // A drop shadow, as Turbo Vision and VBDOS cast it: the cells keep their characters and only
+        // change colour.
         public void Shade(int x, int y, int w, int h, int fg, int bg)
         {
             for (int yy = Math.Max(0, y); yy < Math.Min(Hgt, y + h); yy++)
-                for (int xx = Math.Max(0, x); xx < Math.Min(W, x + w); xx++)
-                {
-                    bool black = fg == 90 && bg == 40 && C[yy, xx].Bg == 40;
-                    C[yy, xx].Fg = black ? 30 : fg;
-                    C[yy, xx].Bg = black ? 100 : bg;
-                }
+                for (int xx = Math.Max(0, x); xx < Math.Min(W, x + w); xx++) { C[yy, xx].Fg = fg; C[yy, xx].Bg = bg; }
         }
 
-        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow) { Window(x, y, w, h, title, col, shadow, null, false); }
+        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow) { Window(x, y, w, h, title, col, shadow, null, false, null, false); }
+        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow, int[] frame, bool single) { Window(x, y, w, h, title, col, shadow, frame, single, null, false); }
 
         // A framed box with a centred title and a shadow. `frame` colours the border and title apart
-        // from the body; `single` draws the one-line frame of a window that is not the main one.
-        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow, int[] frame, bool single)
+        // from the body; `single` draws the one-line frame of a window that is not the main one; `bar`
+        // sets the title into the frame row as a solid bar of those colours, between a control box and
+        // a minimise arrow; `tight` lets the frame line touch the title.
+        public void Window(int x, int y, int w, int h, string title, int[] col, int[] shadow, int[] frame, bool single, int[] titleBar, bool tight)
         {
             int[] f = frame ?? col;
             Shade(x + 2, y + 1, w, h, shadow[0], shadow[1]);
@@ -166,8 +172,15 @@ namespace OpenJuice
             Put(x, y, (single ? STL : TL) + bar + (single ? STR : TR), f[0], f[1]);
             Put(x, y + h - 1, (single ? SBL : BL) + bar + (single ? SBR : BR), f[0], f[1]);
             for (int yy = y + 1; yy < y + h - 1; yy++) { Put(x, yy, side, f[0], f[1]); Put(x + w - 1, yy, side, f[0], f[1]); }
-            string t = " " + title + " ";
-            Put(x + (w - t.Length) / 2, y, t, f[0], f[1]);
+            string t = tight ? title : " " + title + " ";
+            if (titleBar != null)
+            {
+                Put(x + 1, y, ETEE.ToString() + BOX + SEP, f[0], f[1]);
+                Put(x + w - 4, y, SEP.ToString() + '\u25bc' + STEE, f[0], f[1]);
+                Fill(x + 4, y, w - 8, 1, ' ', titleBar[0], titleBar[1]);
+                Put(x + 4 + (w - 8 - title.Length) / 2, y, title);
+            }
+            else Put(x + (w - t.Length) / 2, y, t, f[0], f[1]);
         }
     }
 
@@ -690,116 +703,127 @@ namespace OpenJuice
 
             int ww = (W - 10) / 2;                               // leaves desktop around every shadow
             int lx = 2, rx = 2 + ww + 4, ty = 2, th = 10;
-            int fw = 2 * ww + 4, cy = 13, chh = 9, by = 24, bh = H - 26;
+            int fw = 2 * ww + 4, cy = 13, chh = 10, by = 24, bh = H - 26;
             int iw = ww - 4, bw = iw - 17;
 
-            // --- Charger: every reading as a bar
-            cv.Window(lx, ty, ww, th, "Charger", T.Main, T.Shadow);
+            // --- Status: everything that is said in words, charger first, then the helper
+            Style S = Style.Of(T);
+            cv.Window(lx, ty, ww, th, "Status", T.Main, T.Shadow, null, S.TitleBar != null, S.TitleBar, false);
             object t = J.Get(st, "telemetry");
             object f = J.Get(t, "fields");
+            object w = J.Get(st, "watchdog");
+            object lim = J.Get(st, "limit");
             object lastDone = J.Get(J.Get(st, "charge"), "last_complete");
             string done = J.S(lastDone, "t", null);
             if (done != null && done.Length < 16) done = null;
             int cap = J.I(f, "M", 0), circ = J.I(f, "m", 40);
             if (circ == 0) circ = 40;
+            string sc = J.S(f, "S", null);
             if (J.Has(t, "last"))
             {
-                string sc = J.S(f, "S", null);
                 int[] scol = sc == "2" ? T.Ok : sc == "1" ? T.Info : sc == "5" ? T.Bad : T.Idle;
                 Chip(cv, lx, ty, 0, "State", StateName(sc).ToUpperInvariant(), scol, J.Has(t, "age_s") ? " " + J.I(t, "age_s", 0) + "s ago" : "", iw);
-                double a = J.I(f, "A", 0) / 10.0, v = J.I(f, "V", 0) / 10.0;
-                int temp = J.I(f, "T", 0);
-                // Three bands, the same as the Health window beside it, so the two read across: status
-                // chips, then every gauge, then plain figures.
                 // The limit is the one the charger reports, flagged while it differs from the helper's.
-                object lim0 = J.Get(st, "limit");
                 if (!J.Has(f, "M")) Text(cv, lx, ty, 1, "Limit", "-", iw);
-                else if (J.Has(lim0, "target") && J.I(lim0, "target", cap) != cap)
-                    Chip(cv, lx, ty, 1, "Limit", cap + " A", T.Warn, " target " + J.I(lim0, "target", cap) + " A", iw);
+                else if (J.Has(lim, "target") && J.I(lim, "target", cap) != cap)
+                    Chip(cv, lx, ty, 1, "Limit", cap + " A", T.Warn, " target " + J.I(lim, "target", cap) + " A", iw);
                 else Chip(cv, lx, ty, 1, "Limit", cap + " A", T.Info, "", iw);
-                Bar(cv, T, lx, ty, 2, "Current", a, circ, a.ToString("0.0", Inv) + " A", cap, a > cap + 0.05, bw);
-                Bar(cv, T, lx, ty, 4, "Power", a * v / 1000.0, circ * 0.24, (a * v / 1000.0).ToString("0.00", Inv) + " kW", -1, false, bw);
-                Bar(cv, T, lx, ty, 3, "Volts", v - 200, 60, v.ToString("0.0", Inv) + " V", -1, !(v >= 210 && v <= 255), bw);
-                Bar(cv, T, lx, ty, 5, "Temp", temp, 80, temp + " C", -1, temp > 60, bw);
                 if (sc == "2" && J.Has(f, "E"))                 // charging: this session so far
-                    Text(cv, lx, ty, 6, "Session", (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh", iw);
+                    Text(cv, lx, ty, 2, "Session", (J.I(f, "E", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh", iw);
                 else if (done != null)                          // otherwise the last finished charge: when, how much
                 {
                     string when = done.Substring(0, 10) == now.ToString("yyyy-MM-dd", Inv) ? done.Substring(11, 5) : done.Substring(5, 11).Replace('T', ' ');
-                    Chip(cv, lx, ty, 6, "Finished", when, T.Ok, J.Has(lastDone, "wh") ? " " + (J.I(lastDone, "wh", 0) / 1000.0).ToString("0.0", Inv) + " kWh" : "", iw);
+                    Chip(cv, lx, ty, 2, "Finished", when, T.Ok, J.Has(lastDone, "wh") ? " " + (J.I(lastDone, "wh", 0) / 1000.0).ToString("0.0", Inv) + " kWh" : "", iw);
                 }
-                else Text(cv, lx, ty, 6, "Finished", "no charge seen yet", iw);
-                Text(cv, lx, ty, 7, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
+                else Text(cv, lx, ty, 2, "Finished", "no charge seen yet", iw);
+                Text(cv, lx, ty, 3, "Lifetime", J.Has(f, "L") ? (J.I(f, "L", 0) / 1000.0).ToString("#,##0.000", Inv) + " kWh" : "-", iw);
             }
-            else cv.Put(lx + 2, ty + 1, Clip("no telemetry since the helper started", iw));
-
-            // --- Health: helper, link and the counters that have limits
-            bool single = Style.Of(T).Single;                    // every window but the main one
-            cv.Window(rx, ty, ww, th, "Health", T.Win, T.Shadow, null, single);
-            object w = J.Get(st, "watchdog");
+            else
+            {
+                cv.Put(lx + 2, ty + 1, Clip("no telemetry since the helper", iw));
+                cv.Put(lx + 2, ty + 2, "started");
+            }
             string up = "?";
             DateTime started;
             if (DateTime.TryParse(J.S(st, "started", ""), Inv, DateTimeStyles.None, out started)) up = Dur((now - started).TotalSeconds);
-            Chip(cv, rx, ty, 0, "Helper", alive ? "RUNNING" : "STOPPED", alive ? T.Ok : T.Bad, " up " + up, iw);
+            Chip(cv, lx, ty, 5, "Helper", alive ? "RUNNING" : "STOPPED", alive ? T.Ok : T.Bad, " up " + up, iw);
             string ws = J.S(w, "state", "?");
             int[] wcol = ws == "attached" ? T.Ok
                 : (ws == "reattaching" || ws == "silent" || ws == "rebooting" || ws == "starting" || ws == "released") ? T.Warn : T.Bad;
             string since = Hms(J.S(w, "since", null));
-            Chip(cv, rx, ty, 1, "Link", ws, wcol, " since " + (since.Length >= 5 ? since.Substring(0, 5) : since), iw);
-            if (!J.Has(w, "module_faults")) Text(cv, rx, ty, 2, "Faults", "unknown", iw);
-            else
-            {
-                int nf = J.I(w, "module_faults", 0);
-                Bar(cv, T, rx, ty, 2, "Faults", nf, 8, nf + "/8", 6, nf > 5, bw);
-            }
-            object lim = J.Get(st, "limit");
-            int nr = J.I(w, "reboots_24h", 0), nc = J.I(lim, "corrections_24h", 0);
-            Bar(cv, T, rx, ty, 3, "Reboots", nr, 4, nr + "/4", -1, nr >= 4, bw);
-            Bar(cv, T, rx, ty, 4, "Fixes", nc, 12, nc + "/12", -1, nc >= 12, bw);
-            object rv = J.Get(J.Get(st, "beacon"), "rssi");
-            if (rv is int) Bar(cv, T, rx, ty, 5, "Signal", (int)rv + 90, 50, (int)rv + " dBm", -1, (int)rv < -75, bw);
-            else Text(cv, rx, ty, 5, "Signal", "no beacon", iw);
+            Chip(cv, lx, ty, 6, "Link", ws, wcol, " since " + (since.Length >= 5 ? since.Substring(0, 5) : since), iw);
             object r = J.Get(st, "resolver");
             string lastAsk = Hms(J.S(r, "last_hijack", null));
-            Text(cv, rx, ty, 6, "Resolver", J.Has(r, "last_hijack")
+            Text(cv, lx, ty, 7, "Resolver", J.Has(r, "last_hijack")
                 ? J.I(r, "hijacks", 0) + " answers at " + (lastAsk.Length >= 5 ? lastAsk.Substring(0, 5) : lastAsk)
                 : "no requests yet", iw);
 
+            // --- Gauges: every reading that has a scale, charger first, then the limits
+            bool single = Style.Of(T).Single;                    // every window but the main one
+            cv.Window(rx, ty, ww, th, "Gauges", T.Win, T.Shadow, null, single, null, S.Tight);
+            if (J.Has(t, "last"))
+            {
+                double a = J.I(f, "A", 0) / 10.0, v = J.I(f, "V", 0) / 10.0;
+                int temp = J.I(f, "T", 0);
+                Bar(cv, T, rx, ty, 0, "Current", a, circ, a.ToString("0.0", Inv) + " A", cap, a > cap + 0.05, bw);
+                Bar(cv, T, rx, ty, 1, "Volts", v - 200, 60, v.ToString("0.0", Inv) + " V", -1, !(v >= 210 && v <= 255), bw);
+                Bar(cv, T, rx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, (a * v / 1000.0).ToString("0.00", Inv) + " kW", -1, false, bw);
+                Bar(cv, T, rx, ty, 3, "Temp", temp, 80, temp + " C", -1, temp > 60, bw);
+            }
+            else
+            {
+                string[] names = { "Current", "Volts", "Power", "Temp" };
+                for (int i = 0; i < names.Length; i++) Text(cv, rx, ty, i, names[i], "-", iw);
+            }
+            if (!J.Has(w, "module_faults")) Text(cv, rx, ty, 4, "Faults", "unknown", iw);
+            else
+            {
+                int nf = J.I(w, "module_faults", 0);
+                Bar(cv, T, rx, ty, 4, "Faults", nf, 8, nf + "/8", 6, nf > 5, bw);
+            }
+            int nr = J.I(w, "reboots_24h", 0), nc = J.I(lim, "corrections_24h", 0);
+            Bar(cv, T, rx, ty, 5, "Reboots", nr, 4, nr + "/4", -1, nr >= 4, bw);
+            Bar(cv, T, rx, ty, 6, "Fixes", nc, 12, nc + "/12", -1, nc >= 12, bw);
+            object rv = J.Get(J.Get(st, "beacon"), "rssi");
+            if (rv is int) Bar(cv, T, rx, ty, 7, "Signal", (int)rv + 90, 50, (int)rv + " dBm", -1, (int)rv < -75, bw);
+            else Text(cv, rx, ty, 7, "Signal", "no beacon", iw);
+
             // --- Chart: current per minute
-            int nb = iw - 3, bottom = cy + 6;
-            cv.Window(lx, cy, ww, chh, "Current per minute, A", T.Win, T.Shadow, null, single);
+            int nb = iw - 6, px = lx + 8, prows = chh - 3;      // minutes shown, first plot column, plot rows
+            int bottom = cy + prows;
+            cv.Window(lx, cy, ww, chh, "Current per minute", T.Win, T.Shadow, null, single, null, S.Tight);
             if (hist != null)
             {
-                cv.Put(lx + 2, cy + 1, circ.ToString().PadLeft(2));
-                cv.Put(lx + 2, bottom, " 0");
-                if (cap > 0 && cap < circ) cv.Put(lx + 2, bottom - (int)((double)cap / circ * 6), cap.ToString().PadLeft(2));
+                cv.Put(lx + 2, cy + 1, circ.ToString().PadLeft(2) + " A");
+                cv.Put(lx + 2, bottom, " 0 A");
+                if (cap > 0 && cap < circ) cv.Put(lx + 2, bottom - (int)((double)cap / circ * prows), cap.ToString().PadLeft(2) + " A");
                 for (int i = 0; i < nb; i++)
                 {
                     string key = now.AddMinutes(-(nb - 1 - i)).ToString("yyyy-MM-dd'T'HH:mm", Inv);
                     double a;
                     if (hist.Amps.TryGetValue(key, out a))
                     {
-                        if (a > 0) Column(cv, lx + 5 + i, bottom, 6, a / circ, 1, a > cap + 0.05 ? T.FillBad : T.Fill);
-                        else cv.Put(lx + 5 + i, bottom, "_");
+                        if (a > 0) Column(cv, px + i, bottom, prows, a / circ, 1, a > cap + 0.05 ? T.FillBad : T.Fill);
+                        else cv.Put(px + i, bottom, "_");
                     }
                 }
-                cv.Put(lx + 5, cy + 7, "-" + nb + "m");
-                cv.Put(lx + 5 + nb - 3, cy + 7, "now");
+                cv.Put(px, bottom + 1, "-" + nb + "m");
+                cv.Put(px + nb - 3, bottom + 1, "now");
                 for (int i = 0; i < nb; i++)                    // mark the minute the charge finished
                     if (done != null && now.AddMinutes(-(nb - 1 - i)).ToString("yyyy-MM-dd'T'HH:mm", Inv) == done.Substring(0, 16))
-                        cv.Put(lx + 5 + i, cy + 7, "▼", T.Fill, -1);
+                        cv.Put(px + i, bottom + 1, "▼", T.Fill, -1);
             }
             else cv.Put(lx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
 
             // --- Chart: energy per day
-            cv.Window(rx, cy, ww, chh, "Energy per day, kWh", T.Win, T.Shadow, null, single);
+            cv.Window(rx, cy, ww, chh, "Energy per day", T.Win, T.Shadow, null, single, null, S.Tight);
             if (hist != null && hist.DayKwh.Length > 0)
             {
                 int n0 = hist.DayKwh.Length, first = Math.Max(0, n0 - (chh - 2));
                 double top = 0;
                 for (int i = first; i < n0; i++) if (!double.IsNaN(hist.DayKwh[i]) && hist.DayKwh[i] > top) top = hist.DayKwh[i];
                 if (top <= 0) top = 1;
-                int dbw = iw - 9;
+                int dbw = iw - 13;
                 for (int i = first; i < n0; i++)                 // one horizontal bar per day
                 {
                     int y = cy + 1 + (i - first);
@@ -812,13 +836,13 @@ namespace OpenJuice
                     int full = eighths / 8, part = eighths % 8;
                     cv.Put(rx + 5, y, new string(Canvas.FULL, full), T.Fill, T.Trough[1]);
                     if (part > 0) cv.Put(rx + 5 + full, y, ((char)(0x2590 - part)).ToString(), T.Fill, T.Trough[1]);
-                    cv.Put(rx + 6 + dbw, y, kwh.ToString("0.0", Inv).PadLeft(5));
+                    cv.Put(rx + 6 + dbw, y, kwh.ToString("0.0", Inv).PadLeft(5) + " kWh");
                 }
             }
             else cv.Put(rx + 2, cy + 1, Clip("no telemetry.log to chart", iw));
 
             // --- Event log
-            cv.Window(lx, by, fw, bh, "Event log", T.Log, T.Shadow, null, single);
+            cv.Window(lx, by, fw, bh, "Event log", T.Log, T.Shadow, null, single, null, S.Tight);
             IList evs = J.Get(st, "events") as IList;
             int n = evs == null ? 0 : Math.Min(evs.Count, bh - 2);
             for (int i = 0; i < n; i++)
@@ -913,7 +937,7 @@ namespace OpenJuice
                         int v = Field(s, "L");
                         if (v >= 0) lastL = v;
                     }
-                    const int days = 7;
+                    const int days = 8;
                     DateTime today = DateTime.Today;
                     int[] marks = new int[days + 1];
                     for (int i = 0; i < days; i++)
@@ -937,18 +961,28 @@ namespace OpenJuice
     // Colours and drawing choices for menus and dialogs, derived from a theme. juicebox_helper.py
     // has the same table (_style) and explains the three period styles and their sources:
     //   tv    Borland Turbo Vision     nc    Norton Commander / FAR     mono  one-hue screens
+    //   vb    Visual Basic for MS-DOS 1.0
     class Style
     {
         public string Family, Buttons, Status;
-        public bool CloseBox, Single;
+        public bool CloseBox, Single, Tight;    // Tight: frame lines touch titles and are the edge of a menu box
+        public int[] StatusBar, TitleBar, BarSelHot;      // set only where a style has them
         public int[] BarHot, Menu, MenuHot, Sel, SelHot, Dlg, Frame, Icon, Err, ErrFocus, ErrHot, Btn, BtnHot, Focus, FocusHot, Input, InputSel;
 
         static int[] P(int fg, int bg) { return new int[] { fg, bg }; }
 
         public static Style Of(Theme T)
         {
-            string fam = T.Name == "commander" ? "nc" : (T.Name == "phosphor" || T.Name == "amber" || T.Name == "mono") ? "mono" : "tv";
+            string fam = T.Name == "commander" ? "nc" : T.Name == "vbdos" ? "vb"
+                : (T.Name == "phosphor" || T.Name == "amber" || T.Name == "mono") ? "mono" : "tv";
             int[] bar = T.Bar, bright = T.Main;
+            if (fam == "vb")
+                return new Style { Family = fam, Buttons = "vb", Status = "vb", CloseBox = false, Single = true,
+                    BarHot = bar, BarSelHot = P(37, 40), Menu = bar, MenuHot = P(97, 47), Sel = P(37, 40), SelHot = P(97, 40),
+                    Dlg = P(30, 47), Frame = P(30, 47),
+                    Btn = P(30, 47), BtnHot = P(97, 47), Focus = P(37, 40), FocusHot = P(97, 40),
+                    Input = P(30, 47), InputSel = P(37, 40),
+                    StatusBar = P(30, 46), TitleBar = P(97, 45), Tight = true };
             if (fam == "tv")
             {
                 int[] hot = P(T.Key, bar[1]);
@@ -1017,8 +1051,9 @@ namespace OpenJuice
         public Ui(string dataDir)
         {
             this.dataDir = dataDir;
-            Menu sys = new Menu { Title = "≡", Hot = -1 };
-            sys.Items.Add(new Item { Label = "About OpenJuice...", Hot = 0, Key = "F1", Action = "about", Hint = "What this screen is" });
+            Menu sys = new Menu { Title = "Help", Hot = 0 };
+            sys.Items.Add(new Item { Label = "Gauges...", Hot = 0, Key = "F1", Action = "help", Hint = "What each gauge shows" });
+            sys.Items.Add(new Item { Label = "About OpenJuice...", Hot = 0, Action = "about", Hint = "What this screen is" });
             Menu charger = new Menu { Title = "Charger", Hot = 0 };
             charger.Items.Add(new Item { Label = "Set current limit...", Hot = 12, Key = "F2", Action = "limit", Hint = "Change the current limit" });
             charger.Items.Add(new Item { Label = "Clear fault log...", Hot = 6, Key = "F8", Action = "faults", Hint = "Clear the module's fault log" });
@@ -1031,7 +1066,7 @@ namespace OpenJuice
                 used += t.Name[hot];
                 themes.Items.Add(new Item { Label = t.Name, Hot = hot, Action = "theme:" + t.Name, Hint = "Switch to the " + t.Name + " theme" });
             }
-            menus.Add(sys); menus.Add(charger); menus.Add(themes);
+            menus.Add(charger); menus.Add(themes); menus.Add(sys);
         }
 
         public bool Active { get { return menu >= 0 || dlg != null; } }
@@ -1059,10 +1094,10 @@ namespace OpenJuice
         {
             if (dlg != null) return DialogKey(k);
             if (menu >= 0) return MenuKey(k);
-            if (k == "f10" || k == "f9" || k == "m") Open(1, false);       // highlights the first named menu; Enter opens it
+            if (k == "f10" || k == "f9" || k == "m") Open(0, false);       // highlights the first menu; Enter opens it
             else if (k.StartsWith("alt+") && TitleFor(k.Substring(4)) >= 0) Open(TitleFor(k.Substring(4)), true);
             else if (k == "t" || k == "f5") Run("theme:" + Theme.All[(ThemeIx + 1) % Theme.All.Length].Name);
-            else if (k == "f1") Run("about");
+            else if (k == "f1") Run("help");
             else if (k == "f2" || k == "l") Run("limit");
             else if (k == "f8" || k == "f") Run("faults");
             else return false;
@@ -1113,6 +1148,26 @@ namespace OpenJuice
             if (action.StartsWith("theme:"))
             {
                 if (ThemeChosen != null) ThemeChosen(Theme.IndexOf(action.Substring(6)));
+                return;
+            }
+            if (action == "help")                                // the same wording as the terminal screen's
+            {
+                Info("Gauges", "",
+                    "Current  Amps going to the vehicle now. The scale is the circuit",
+                    "         rating; the tick is the maximum charging rate in force.",
+                    "Volts    Supply voltage at the charger. Red outside 210 to 255 V.",
+                    "Power    Charger power in kW: amps times volts.",
+                    "Temp     Temperature inside the charger. Red above 60 C.",
+                    "Faults   Crashes logged by the charger's WiFi module. At 8 it",
+                    "         enters Safe Mode; this helper stops taking control at 6",
+                    "         (the tick). Clear the log from the Charger menu.",
+                    "Reboots  Times in 24 hours this helper rebooted the WiFi module",
+                    "         to recover it. The helper allows itself 4 a day.",
+                    "Fixes    Times in 24 hours this helper put the maximum charging",
+                    "         rate back after the charger reported a different one.",
+                    "         The helper allows itself 12 a day, because each one",
+                    "         is written to the charger's memory.",
+                    "Signal   WiFi signal at the charger. Red below -75 dBm.");
                 return;
             }
             if (action == "about")
@@ -1267,10 +1322,24 @@ namespace OpenJuice
         void StatusLine(Canvas cv, Style S, int[] bar)
         {
             int W = cv.W, y = cv.Hgt - 1;
+            if (S.StatusBar != null) bar = S.StatusBar;
             cv.Fill(0, y, W, 1, ' ', bar[0], bar[1]);
             string note = "";                                   // the highlighted menu item's hint
             if (menu >= 0 && opened) note = menus[menu].Items[item].Hint;
-            else if (said != null && DateTime.Now < saidUntil)
+            if (S.Status == "vb")                               // F1=Help | what the keys do now | clock
+            {
+                if (note.Length == 0 && said != null && DateTime.Now < saidUntil) note = said;
+                else if (note.Length == 0 && dlg != null) note = "Enter=Execute   Esc=Cancel   Tab=Next Field";
+                else if (note.Length == 0) note = "F10=Menu   L=Limit   F=Faults   T=Theme";
+                int room = Math.Max(0, W - 34);
+                cv.Put(1, y, "F1=Help");
+                cv.Put(9, y, Canvas.SEP.ToString());
+                cv.Put(11, y, note.Length > room ? note.Substring(0, Math.Max(0, room - 3)) + "..." : note);
+                cv.Put(W - 22, y, Canvas.SEP.ToString());
+                cv.Put(W - 20, y, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", Inv));
+                return;
+            }
+            if (note.Length == 0 && said != null && DateTime.Now < saidUntil)
             {
                 cv.Put(1, y, said.Length > W - 2 ? said.Substring(0, W - 2) : said);   // a result takes the whole line
                 return;
@@ -1278,7 +1347,7 @@ namespace OpenJuice
             if (S.Status == "fn")                               // ten numbered cells; unbound keys stay blank
             {
                 if (note.Length > 0) { cv.Put(1, y, note); return; }
-                string[] labels = { "About", "Limit", "", "", "Theme", "", "", "Faults", "Menu", "Menu" };
+                string[] labels = { "Help", "Limit", "", "", "Theme", "", "", "Faults", "Menu", "Menu" };
                 int cell = W / 10;
                 for (int i = 0; i < 10; i++)
                 {
@@ -1309,25 +1378,27 @@ namespace OpenJuice
             int[] bar = T.Bar;
             int W = cv.W, H = cv.Hgt;
             titleAt.Clear(); itemAt.Clear(); buttonAt.Clear(); closeAt = Rectangle.Empty;
-            cv.Fill(0, 0, Math.Max(0, W - 21), 1, ' ', bar[0], bar[1]);          // menu bar, left of the clock
+            bool clockBelow = S.Status == "vb";                 // that style keeps the clock on the status line
+            cv.Fill(0, 0, clockBelow ? W : Math.Max(0, W - 21), 1, ' ', bar[0], bar[1]);          // menu bar, left of the clock
             int x = 1;
             int[] xs = new int[menus.Count];
             for (int i = 0; i < menus.Count; i++)
             {
                 Menu m = menus[i];
+                string name = m.Title;
                 xs[i] = x;
                 if (i == menu)
                 {
-                    Put(cv, x, 0, " " + m.Title + " ", S.Sel);
-                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, m.Title.Substring(m.Hot, 1), S.SelHot);
+                    Put(cv, x, 0, " " + name + " ", S.Sel);
+                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, name.Substring(m.Hot, 1), S.BarSelHot ?? S.SelHot);
                 }
                 else
                 {
-                    cv.Put(x + 1, 0, m.Title);
-                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, m.Title.Substring(m.Hot, 1), S.BarHot);
+                    cv.Put(x + 1, 0, name);
+                    if (m.Hot >= 0) Put(cv, x + 1 + m.Hot, 0, name.Substring(m.Hot, 1), S.BarHot);
                 }
-                titleAt.Add(new Rectangle(x, 0, m.Title.Length + 2, 1));
-                x += m.Title.Length + 2;
+                titleAt.Add(new Rectangle(x, 0, name.Length + 2, 1));
+                x += name.Length + 2;
             }
             StatusLine(cv, S, bar);
 
@@ -1340,8 +1411,9 @@ namespace OpenJuice
                 inner += 2 + (mark ? 2 : 0);
                 int mx = xs[menu] - 1, my = 1, mw = inner + 4, mh = items.Count + 2;     // a blank column outside the frame
                 string rule = new string(Canvas.SH, inner);
-                cv.Shade(mx + 2, my + 1, mw, mh, T.Shadow[0], T.Shadow[1]);
-                cv.Fill(mx, my, mw, mh, ' ', S.Menu[0], S.Menu[1]);
+                int edge = S.Tight ? 1 : 0;                     // ...except where the frame is the edge of the box
+                cv.Shade(mx + 2 + edge, my + 1, mw - 2 * edge, mh, T.Shadow[0], T.Shadow[1]);
+                cv.Fill(mx + edge, my, mw - 2 * edge, mh, ' ', S.Menu[0], S.Menu[1]);
                 cv.Put(mx + 1, my, Canvas.STL + rule + Canvas.STR);
                 cv.Put(mx + 1, my + mh - 1, Canvas.SBL + rule + Canvas.SBR);
                 for (int i = 0; i < items.Count; i++)
@@ -1362,6 +1434,7 @@ namespace OpenJuice
 
             Dialog d = dlg;
             if (d == null) return;
+            if (S.Buttons == "vb") { DialogVb(cv, T, S, d); return; }
             bool err = d.Tone == "err" && S.Err != null;
             int[] body = err ? S.Err : S.Dlg, frame = err ? S.Err : S.Frame;
             int[] btn = err ? body : S.Btn, btnhot = err ? S.ErrHot : S.BtnHot;
@@ -1421,6 +1494,63 @@ namespace OpenJuice
                 }
                 buttonAt.Add(new Rectangle(x, by, text.Length, 1));
                 x += text.Length + 2;
+            }
+        }
+
+        // A 3-row box whose top and left edges are one colour and its bottom and right another.
+        static void Box(Canvas cv, int x, int y, int w, int lit, int dark, int bg, bool dbl)
+        {
+            char hz = dbl ? Canvas.H : Canvas.SH, vt = dbl ? Canvas.V : Canvas.SEP;
+            char tl = dbl ? Canvas.TL : Canvas.STL, tr = dbl ? Canvas.TR : Canvas.STR, bl = dbl ? Canvas.BL : Canvas.SBL, br = dbl ? Canvas.BR : Canvas.SBR;
+            string rule = new string(hz, w - 2);
+            cv.Put(x, y, tl + rule, lit, bg);
+            cv.Put(x + w - 1, y, tr.ToString(), dark, bg);
+            cv.Put(x, y + 1, vt.ToString(), lit, bg);
+            cv.Put(x + 1, y + 1, new string(' ', w - 2), dark, bg);
+            cv.Put(x + w - 1, y + 1, vt.ToString(), dark, bg);
+            cv.Put(x, y + 2, bl.ToString(), lit, bg);
+            cv.Put(x + 1, y + 2, rule + br, dark, bg);
+        }
+
+        // A VBDOS dialog: a frameless panel under a title strip, 3-D buttons, a sunken input box.
+        void DialogVb(Canvas cv, Theme T, Style S, Dialog d)
+        {
+            int W = cv.W, H = cv.Hgt;
+            int[] body = S.Dlg;
+            string[] names = d.Kind == "confirm" ? new string[] { "Yes", "No" } : d.Kind == "input" ? new string[] { "OK", "Cancel" } : new string[] { "OK" };
+            int dw = Math.Max(30, d.Title.Length + 4);
+            foreach (string line in d.Lines) dw = Math.Max(dw, line.Length);
+            dw += 6;
+            int dh = d.Lines.Count + (d.Kind == "input" ? 11 : 7);
+            int dx = (W - dw) / 2, dy = Math.Max(2, (H - dh) / 2 - 2);
+            cv.Shade(dx + 2, dy + 1, dw, dh, T.Shadow[0], T.Shadow[1]);
+            cv.Fill(dx, dy, dw, dh, ' ', body[0], body[1]);
+            cv.Fill(dx, dy, dw, 1, ' ', S.TitleBar[0], S.TitleBar[1]);
+            cv.Put(dx + (dw - d.Title.Length) / 2, dy, d.Title);
+            for (int i = 0; i < d.Lines.Count; i++) cv.Put(dx + 3, dy + 2 + i, d.Lines[i]);
+            int y = dy + 2 + d.Lines.Count;
+            if (d.Kind == "input")
+            {
+                Box(cv, dx + 3, y, 8, body[0], 97, body[1], false);          // sunken: dark top and left
+                Put(cv, dx + 5, y + 1, d.Value, d.Fresh ? S.InputSel : body);
+                if (!d.Fresh) Put(cv, dx + 5 + d.Value.Length, y + 1, " ", S.InputSel);     // a block cursor
+                cv.Put(dx + 13, y + 1, d.Error);
+                y += 4;
+            }
+            else y += 1;
+            int total = 2 * (names.Length - 1);
+            int[] widths = new int[names.Length];
+            for (int i = 0; i < names.Length; i++) { widths[i] = Math.Max(names[i].Length + 4, 8); total += widths[i]; }
+            int x = dx + (dw - total) / 2;
+            for (int i = 0; i < names.Length; i++)
+            {
+                bool on = i == d.Focus;
+                Box(cv, x, y, widths[i], 97, body[0], body[1], on);          // raised; double-lined with focus
+                int at = x + 1 + (widths[i] - 2 - names[i].Length) / 2;
+                Put(cv, at, y + 1, names[i], on ? S.Focus : body);
+                Put(cv, at, y + 1, names[i].Substring(0, 1), on ? S.FocusHot : S.BtnHot);
+                buttonAt.Add(new Rectangle(x, y, widths[i], 3));
+                x += widths[i] + 2;
             }
         }
 
@@ -1778,8 +1908,113 @@ namespace OpenJuice
         }
     }
 
+    // Text drawn from a Windows bitmap font file instead of a scalable font, for the look of a DOS text
+    // screen: one-bit glyphs with no smoothing. The glyphs are read at run time from the "Terminal"
+    // font this PC already has (dosapp.fon, 10 by 18, in the OEM code page), the font Windows used for
+    // DOS programs in a window. Nothing is shipped with the monitor; if the file is missing or
+    // unreadable, or the monitor is started with --smooth, text is drawn in Consolas as before.
+    class BitFont
+    {
+        public readonly int W, H;
+        readonly ushort[][] glyphs = new ushort[256][];          // per character, one word per row, leftmost pixel in bit 15
+        readonly Dictionary<int, Bitmap> cache = new Dictionary<int, Bitmap>();
+        readonly Dictionary<char, int> codes = new Dictionary<char, int>();
+        readonly Encoding oem;
+
+        BitFont(int w, int h)
+        {
+            W = w; H = h;
+            try { oem = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage); }
+            catch { oem = Encoding.GetEncoding(437); }
+            // Symbols the OEM code page keeps in its control-character positions.
+            string low = "\u25bc\u25b2\u2022\u2191\u2193\u2192\u2190\u25ba\u25c4";
+            int[] at = { 0x1F, 0x1E, 0x07, 0x18, 0x19, 0x1A, 0x1B, 0x10, 0x11 };
+            for (int i = 0; i < low.Length; i++) codes[low[i]] = at[i];
+        }
+
+        public static BitFont Load()
+        {
+            try
+            {
+                string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "dosapp.fon");
+                return Load(File.ReadAllBytes(path), 10, 18);
+            }
+            catch { return null; }
+        }
+
+        // A .FON file is a 16-bit Windows module whose resources are .FNT bitmap fonts of several sizes.
+        static BitFont Load(byte[] d, int w, int h)
+        {
+            if (d[0] != 'M' || d[1] != 'Z') return null;
+            int ne = BitConverter.ToInt32(d, 0x3C);
+            if (d[ne] != 'N' || d[ne + 1] != 'E') return null;
+            int rt = ne + BitConverter.ToUInt16(d, ne + 0x24);
+            int shift = BitConverter.ToUInt16(d, rt), p = rt + 2;
+            while (true)
+            {
+                int type = BitConverter.ToUInt16(d, p), count = BitConverter.ToUInt16(d, p + 2);
+                if (type == 0) return null;
+                p += 8;
+                for (int i = 0; i < count; i++, p += 12)
+                {
+                    if (type != 0x8008) continue;                               // RT_FONT
+                    int o = BitConverter.ToUInt16(d, p) << shift;
+                    if (BitConverter.ToUInt16(d, o + 86) != w || BitConverter.ToUInt16(d, o + 88) != h) continue;
+                    bool v3 = BitConverter.ToUInt16(d, o) != 0x200;
+                    int first = d[o + 95], last = d[o + 96];
+                    BitFont f = new BitFont(w, h);
+                    for (int c = first; c <= last; c++)
+                    {
+                        int e = o + (v3 ? 148 : 118) + (c - first) * (v3 ? 6 : 4);
+                        int gw = BitConverter.ToUInt16(d, e);
+                        int bits = o + (v3 ? BitConverter.ToInt32(d, e + 2) : BitConverter.ToUInt16(d, e + 2));
+                        ushort[] rows = new ushort[h];
+                        for (int y = 0; y < h; y++)                              // stored a byte-wide column at a time
+                        {
+                            int v = d[bits + y] << 8;
+                            if (gw > 8) v |= d[bits + h + y];
+                            rows[y] = (ushort)v;
+                        }
+                        f.glyphs[c] = rows;
+                    }
+                    return f;
+                }
+            }
+        }
+
+        int Code(char c)
+        {
+            if (c < 0x80) return c;
+            int code;
+            if (codes.TryGetValue(c, out code)) return code;
+            byte[] b = oem.GetBytes(new char[] { c });
+            code = b.Length == 1 && b[0] != '?' ? (int)b[0] : (int)'?';
+            codes[c] = code;
+            return code;
+        }
+
+        // The glyph for a character in one colour, on a transparent background.
+        public Bitmap Glyph(char c, int fg)
+        {
+            int code = Code(c), key = code * 1000 + fg;
+            Bitmap bmp;
+            if (cache.TryGetValue(key, out bmp)) return bmp;
+            bmp = new Bitmap(W, H, PixelFormat.Format32bppPArgb);
+            ushort[] rows = glyphs[code] ?? glyphs['?'];
+            Color ink = Program.Pal(fg);
+            if (rows != null)
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++)
+                        if ((rows[y] & (0x8000 >> x)) != 0) bmp.SetPixel(x, y, ink);
+            cache[key] = bmp;
+            return bmp;
+        }
+    }
+
     static class Program
     {
+        public static BitFont Bits;             // null: draw text with the scalable font
+
         static readonly Color[] Vga = {
             Color.FromArgb(0, 0, 0), Color.FromArgb(170, 0, 0), Color.FromArgb(0, 170, 0), Color.FromArgb(170, 85, 0),
             Color.FromArgb(0, 0, 170), Color.FromArgb(170, 0, 170), Color.FromArgb(0, 170, 170), Color.FromArgb(170, 170, 170),
@@ -1794,6 +2029,7 @@ namespace OpenJuice
 
         public static void Measure(Font font, out int cw, out int ch)
         {
+            if (Bits != null) { cw = Bits.W; ch = Bits.H; return; }
             Size sz = TextRenderer.MeasureText("MMMMMMMMMM", font, new Size(int.MaxValue, int.MaxValue), Flags);
             cw = Math.Max(1, sz.Width / 10);
             ch = Math.Max(1, sz.Height);
@@ -1802,7 +2038,8 @@ namespace OpenJuice
         static bool IsLine(char c)
         {
             return c == Canvas.H || c == Canvas.V || c == Canvas.TL || c == Canvas.TR || c == Canvas.BL || c == Canvas.BR || c == Canvas.SEP
-                || c == Canvas.SH || c == Canvas.STL || c == Canvas.STR || c == Canvas.SBL || c == Canvas.SBR;
+                || c == Canvas.SH || c == Canvas.STL || c == Canvas.STR || c == Canvas.SBL || c == Canvas.SBR
+                || c == Canvas.STEE || c == Canvas.ETEE;
         }
 
         // Border characters drawn as exact pixel lines, so font smoothing cannot tint them.
@@ -1811,6 +2048,12 @@ namespace OpenJuice
             int mx = x + cw / 2, my = y + ch / 2, r = x + cw, b = y + ch;
             if (c == Canvas.SEP) { g.FillRectangle(br, mx, y, 1, ch); return; }
             if (c == Canvas.SH) { g.FillRectangle(br, x, my, cw, 1); return; }
+            if (c == Canvas.STEE || c == Canvas.ETEE)
+            {
+                g.FillRectangle(br, mx, y, 1, ch);
+                g.FillRectangle(br, c == Canvas.STEE ? mx : x, my, c == Canvas.STEE ? r - mx : mx - x + 1, 1);
+                return;
+            }
             if (c == Canvas.STL || c == Canvas.STR || c == Canvas.SBL || c == Canvas.SBR)
             {
                 bool toRight = c == Canvas.STL || c == Canvas.SBL, toBottom = c == Canvas.STL || c == Canvas.STR;
@@ -1844,17 +2087,23 @@ namespace OpenJuice
                     while (x < cv.W && cv.C[y, x].Fg == fg && cv.C[y, x].Bg == bg)
                     {
                         char c = cv.C[y, x].Ch;
-                        if ((c >= '\u2580' && c <= '\u258f') || IsLine(c)) c = ' ';   // blocks and borders are painted below
+                        if ((c >= '\u2580' && c <= '\u258f') || c == Canvas.EMPTY || IsLine(c)) c = ' ';   // blocks, shade and borders are painted below
                         else if (c != ' ') ink = true;
                         sb.Append(c);
                         x++;
                     }
                     g.FillRectangle(Brush(brushes, bg), start * cw, y * ch, (x - start) * cw, ch);
-                    if (ink) TextRenderer.DrawText(g, sb.ToString(), font, new Point(start * cw, y * ch), Pal(fg), Pal(bg), Flags);
+                    if (ink && Bits != null)
+                    {
+                        for (int k = 0; k < sb.Length; k++)
+                            if (sb[k] != ' ') g.DrawImageUnscaled(Bits.Glyph(sb[k], fg), (start + k) * cw, y * ch);
+                    }
+                    else if (ink) TextRenderer.DrawText(g, sb.ToString(), font, new Point(start * cw, y * ch), Pal(fg), Pal(bg), Flags);
                     for (int i = start; i < x; i++)
                     {
                         char b = cv.C[y, i].Ch;
                         if (IsLine(b)) { Line(g, Brush(brushes, fg), b, i * cw, y * ch, cw, ch); continue; }
+                        if (b == Canvas.EMPTY) { g.FillRectangle(Dither(fg, bg), i * cw, y * ch, cw, ch); continue; }
                         if (b == Canvas.UPPER) { g.FillRectangle(Brush(brushes, fg), i * cw, y * ch, cw, ch / 2); continue; }
                         if (b == Canvas.LOWER) { g.FillRectangle(Brush(brushes, fg), i * cw, y * ch + ch - ch / 2, cw, ch / 2); continue; }
                         if (b < '\u2581' || b > '\u258f') continue;
@@ -1868,6 +2117,22 @@ namespace OpenJuice
                     }
                 }
             }
+        }
+
+        // The light shade character as a VGA text screen shows it: one dot in four, staggered row by row.
+        // Drawn from the bit pattern, so font smoothing cannot blur or tint it.
+        static readonly Dictionary<int, TextureBrush> dithers = new Dictionary<int, TextureBrush>();
+
+        static TextureBrush Dither(int fg, int bg)
+        {
+            TextureBrush b;
+            if (dithers.TryGetValue(fg * 1000 + bg, out b)) return b;
+            Bitmap tile = new Bitmap(4, 2);
+            for (int yy = 0; yy < 2; yy++)
+                for (int xx = 0; xx < 4; xx++) tile.SetPixel(xx, yy, Pal(xx == (yy == 0 ? 3 : 1) ? fg : bg));
+            b = new TextureBrush(tile);
+            dithers[fg * 1000 + bg] = b;
+            return b;
         }
 
         static SolidBrush Brush(Dictionary<int, SolidBrush> cache, int sgr)
@@ -1913,6 +2178,7 @@ namespace OpenJuice
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenJuice");
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            if (Array.IndexOf(args, "--smooth") < 0) Bits = BitFont.Load();       // the DOS-box bitmap font, when this PC has it
             if (args.Length >= 2 && args[0] == "--icons")
             {
                 StateIcon.Sheet(args[1]);

@@ -1146,8 +1146,17 @@ THEMES.update({
                  fill=37, fillbad=97, tick=97,
                  ok=(30, 47), warn=(30, 107), bad=(30, 107), info=(30, 47), idle=(97, 40)),
 })
+# Microsoft Visual Basic for MS-DOS 1.0, after its programming environment: light grey windows and
+# menus on a dotted black desktop, a magenta title bar on the active window, a cyan status line, the
+# blue code window (here the Event log), and scroll-bar style gauges (black thumb on a dotted grey
+# track). VBDOS has no green or yellow of its own; the state chips keep them so that "charging" and
+# "warning" still read at a glance.
+THEMES["vbdos"] = dict(pattern=True, desk=(37, 40), bar=(30, 47), key=97, main=(30, 47), win=(30, 47),
+                       log=(37, 44), logtime=97, logtext=37, shadow=(90, 40), trough=(30, 47),
+                       fill=30, fillbad=31, tick=97,
+                       ok=(30, 42), warn=(30, 43), bad=(97, 41), info=(30, 46), idle=(37, 40))
 THEME_ORDER = ["turbo", "commander", "pascal", "midnight", "ocean", "phosphor", "amber", "light",
-               "hotdog", "mono"]
+               "hotdog", "mono", "vbdos"]
 
 
 def load_theme(data_dir):
@@ -1191,16 +1200,17 @@ class _Canvas:
             self.put(x, yy, ch * w, fg, bg)
 
     def shade(self, x, y, w, h, fg, bg):
-        """A drop shadow, as Turbo Vision casts it: the cells keep their characters and only
-        change colour. Dark grey on black would vanish on a black cell, so that one is reversed."""
+        """A drop shadow, as Turbo Vision and VBDOS cast it: the cells keep their characters and
+        only change colour."""
         for yy in range(max(0, y), min(self.h, y + h)):
             for xx in range(max(0, x), min(self.w, x + w)):
-                ch, _, b0 = self.cells[yy][xx]
-                self.cells[yy][xx] = (ch, 30, 100) if (fg, bg, b0) == (90, 40, 40) else (ch, fg, bg)
+                self.cells[yy][xx] = (self.cells[yy][xx][0], fg, bg)
 
-    def window(self, x, y, w, h, title, colors, shadow, g, frame=None, single=False):
+    def window(self, x, y, w, h, title, colors, shadow, g, frame=None, single=False, bar=None, tight=False):
         """A framed box with a centred title and a shadow. `frame` colours the border and title
-        apart from the body; `single` draws the one-line frame of a window that is not the main one."""
+        apart from the body; `single` draws the one-line frame of a window that is not the main one;
+        `bar` sets the title into the frame row as a solid bar of those colours, between a control
+        box and a minimise arrow; `tight` lets the frame line touch the title."""
         fg, bg = colors
         ffg, fbg = frame or colors
         hz, vt = (g["sh"], g["sv"]) if single else (g["h"], g["v"])
@@ -1213,8 +1223,14 @@ class _Canvas:
         for yy in range(y + 1, y + h - 1):
             self.put(x, yy, vt, ffg, fbg)
             self.put(x + w - 1, yy, vt, ffg, fbg)
-        t = " %s " % title
-        self.put(x + (w - len(t)) // 2, y, t, ffg, fbg)
+        t = title if tight else " %s " % title
+        if bar:
+            self.put(x + 1, y, g["etee"] + g["box"] + g["sv"], ffg, fbg)
+            self.put(x + w - 4, y, g["sv"] + g["mark"] + g["stee"], ffg, fbg)
+            self.fill(x + 4, y, w - 8, 1, " ", *bar)
+            self.put(x + 4 + (w - 8 - len(title)) // 2, y, title)
+        else:
+            self.put(x + (w - len(t)) // 2, y, t, ffg, fbg)
 
     def render(self, color):
         lines = []
@@ -1308,7 +1324,7 @@ def _log_lifetime_at(f, size, stamp):
     return None
 
 
-def load_history(data_dir, days=7):
+def load_history(data_dir, days=8):
     """Chart data from telemetry.log: peak amps per minute (recent) and kWh per day.
 
     Returns {"amps": {"YYYY-MM-DDTHH:MM": amps}, "days": [(label, kWh or None), ...]} or None.
@@ -1366,7 +1382,7 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
 
     ww = (W - 10) // 2                                      # leaves desktop around every shadow
     lx, rx, ty, th = 2, 2 + ww + 4, 2, 10
-    fw, cy, chh, by, bh = 2 * ww + 4, 13, 9, 24, H - 26     # charts row, then the Event log
+    fw, cy, chh, by, bh = 2 * ww + 4, 13, 10, 24, H - 26     # charts row, then the Event log
     iw = ww - 4                                             # text columns inside a window
     bw = iw - 17                                            # bar cells in a "label bar value" row
 
@@ -1411,22 +1427,22 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
             cv.put(x0, bottom - full, g["full"] * width, fg)
         return bottom - full - (0 if part else -1)
 
-    # --- Charger: every reading as a bar ----------------------------------------
-    cv.window(lx, ty, ww, th, "Charger", T["main"], T["shadow"], g)
+    # --- Status: everything that is said in words, charger first, then the helper ---
+    S = _style(theme)
+    cv.window(lx, ty, ww, th, "Status", T["main"], T["shadow"], g,
+              single=bool(S.get("titlebar")), bar=S.get("titlebar"))
     t = st["telemetry"]
     f = t["fields"]
+    w = st["watchdog"]
     done = (st.get("charge") or {}).get("last_complete")
     if not (isinstance(done, dict) and isinstance(done.get("t"), str) and len(done["t"]) >= 16):
         done = None
     cap, circ = _ival(f, "M"), _ival(f, "m", 40) or 40
+    sc = f.get("S")
     if t["last"]:
-        sc = f.get("S")
         sname = STATE_NAMES.get(sc, sc or "?").upper()
         scol = T[{"2": "ok", "1": "info", "0": "idle", "5": "bad"}.get(sc, "idle")]
         chip(lx, ty, 0, "State", sname, scol, " %ds ago" % t["age_s"] if t["age_s"] is not None else "")
-        a, v, temp = _ival(f, "A") / 10.0, _ival(f, "V") / 10.0, _ival(f, "T")
-        # Three bands, the same as the Health window beside it, so the two read across: status
-        # chips, then every gauge, then plain figures.
         # The limit is the one the charger reports, flagged while it differs from the helper's.
         target = (st.get("limit") or {}).get("target")
         if "M" not in f:
@@ -1435,91 +1451,96 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
             chip(lx, ty, 1, "Limit", "%d A" % cap, T["warn"], " target %d A" % target)
         else:
             chip(lx, ty, 1, "Limit", "%d A" % cap, T["info"])
-        bar(lx, ty, 2, "Current", a, circ, "%.1f A" % a, cap, bad=a > cap + 0.05)
-        bar(lx, ty, 4, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
-        bar(lx, ty, 3, "Volts", v - 200, 60, "%.1f V" % v, bad=not 210 <= v <= 255)
-        bar(lx, ty, 5, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
         if sc == "2" and "E" in f:                  # charging: this session so far
-            text(lx, ty, 6, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0))
+            text(lx, ty, 2, "Session", "{:,.3f} kWh".format(_ival(f, "E") / 1000.0))
         elif done:                                  # otherwise the last finished charge: when, how much
             when = done["t"][11:16] if done["t"][:10] == now.strftime("%Y-%m-%d") else done["t"][5:16]
-            chip(lx, ty, 6, "Finished", when.replace("T", " "), T["ok"],
+            chip(lx, ty, 2, "Finished", when.replace("T", " "), T["ok"],
                  "" if done.get("wh") is None else " %.1f kWh" % (done["wh"] / 1000.0))
         else:
-            text(lx, ty, 6, "Finished", "no charge seen yet")
-        text(lx, ty, 7, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
+            text(lx, ty, 2, "Finished", "no charge seen yet")
+        text(lx, ty, 3, "Lifetime", "{:,.3f} kWh".format(_ival(f, "L") / 1000.0) if "L" in f else "-")
     else:
-        cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper started", iw))
-
-    # --- Health: helper, link and the counters that have limits -------------------
-    single = _style(theme)["single"]
-    cv.window(rx, ty, ww, th, "Health", T["win"], T["shadow"], g, single=single)
-    w = st["watchdog"]
+        cv.put(lx + 2, ty + 1, _clip("no telemetry since the helper", iw))
+        cv.put(lx + 2, ty + 2, "started")
     try:
         up = _dur((now - datetime.datetime.fromisoformat(st["started"])).total_seconds())
     except (ValueError, TypeError, KeyError):
         up = "?"
-    chip(rx, ty, 0, "Helper", "RUNNING" if alive else "STOPPED", T["ok"] if alive else T["bad"],
+    chip(lx, ty, 5, "Helper", "RUNNING" if alive else "STOPPED", T["ok"] if alive else T["bad"],
          " up %s" % up)
     ws = w["state"]
     wcol = (T["ok"] if ws == "attached" else
             T["warn"] if ws in ("reattaching", "silent", "rebooting", "starting", "released") else T["bad"])
-    chip(rx, ty, 1, "Link", ws, wcol, " since %s" % _hhmmss(w["since"])[:5])
+    chip(lx, ty, 6, "Link", ws, wcol, " since %s" % _hhmmss(w["since"])[:5])
+    r = st["resolver"]
+    text(lx, ty, 7, "Resolver", "%d answers at %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5])
+         if r.get("last_hijack") else "no requests yet")
+
+    # --- Gauges: every reading that has a scale, charger first, then the limits ---
+    single = _style(theme)["single"]
+    cv.window(rx, ty, ww, th, "Gauges", T["win"], T["shadow"], g, single=single, tight=S.get("tight", False))
+    if t["last"]:
+        a, v, temp = _ival(f, "A") / 10.0, _ival(f, "V") / 10.0, _ival(f, "T")
+        bar(rx, ty, 0, "Current", a, circ, "%.1f A" % a, cap, bad=a > cap + 0.05)
+        bar(rx, ty, 1, "Volts", v - 200, 60, "%.1f V" % v, bad=not 210 <= v <= 255)
+        bar(rx, ty, 2, "Power", a * v / 1000.0, circ * 0.24, "%.2f kW" % (a * v / 1000.0))
+        bar(rx, ty, 3, "Temp", temp, 80, "%d C" % temp, bad=temp > 60)
+    else:
+        for i, label in enumerate(("Current", "Volts", "Power", "Temp")):
+            text(rx, ty, i, label, "-")
     nf = w["module_faults"]
     if nf is None:
-        text(rx, ty, 2, "Faults", "unknown")
+        text(rx, ty, 4, "Faults", "unknown")
     else:
-        bar(rx, ty, 2, "Faults", int(nf), 8, "%d/8" % int(nf), cap=Watchdog.FAULT_GUARD, bad=int(nf) > 5)
+        bar(rx, ty, 4, "Faults", int(nf), 8, "%d/8" % int(nf), cap=Watchdog.FAULT_GUARD, bad=int(nf) > 5)
     nr, nc = w["reboots_24h"], st["limit"]["corrections_24h"]
-    bar(rx, ty, 3, "Reboots", nr, Watchdog.REBOOTS_PER_DAY, "%d/%d" % (nr, Watchdog.REBOOTS_PER_DAY),
+    bar(rx, ty, 5, "Reboots", nr, Watchdog.REBOOTS_PER_DAY, "%d/%d" % (nr, Watchdog.REBOOTS_PER_DAY),
         bad=nr >= Watchdog.REBOOTS_PER_DAY)
-    bar(rx, ty, 4, "Fixes", nc, LimitKeeper.DAILY_CAP, "%d/%d" % (nc, LimitKeeper.DAILY_CAP),
+    bar(rx, ty, 6, "Fixes", nc, LimitKeeper.DAILY_CAP, "%d/%d" % (nc, LimitKeeper.DAILY_CAP),
         bad=nc >= LimitKeeper.DAILY_CAP)
     rssi = (st["beacon"] or {}).get("rssi")
     if isinstance(rssi, int):
-        bar(rx, ty, 5, "Signal", rssi + 90, 50, "%d dBm" % rssi, bad=rssi < -75)
+        bar(rx, ty, 7, "Signal", rssi + 90, 50, "%d dBm" % rssi, bad=rssi < -75)
     else:
-        text(rx, ty, 5, "Signal", "no beacon")
-    r = st["resolver"]
-    text(rx, ty, 6, "Resolver", "%d answers at %s" % (r["hijacks"], _hhmmss(r["last_hijack"])[:5])
-         if r.get("last_hijack") else "no requests yet")
+        text(rx, ty, 7, "Signal", "no beacon")
 
     # --- Chart: current per minute --------------------------------------------------
-    nb = iw - 3
-    cv.window(lx, cy, ww, chh, "Current per minute, A", T["win"], T["shadow"], g, single=single)
-    bottom = cy + 6
+    nb, px, prows = iw - 6, lx + 8, chh - 3        # minutes shown, first plot column, plot rows
+    cv.window(lx, cy, ww, chh, "Current per minute", T["win"], T["shadow"], g, single=single, tight=S.get("tight", False))
+    bottom = cy + prows
     if hist:
-        cv.put(lx + 2, cy + 1, "%2d" % circ)
-        cv.put(lx + 2, bottom, " 0")
+        cv.put(lx + 2, cy + 1, "%2d A" % circ)
+        cv.put(lx + 2, bottom, " 0 A")
         if 0 < cap < circ:
-            cv.put(lx + 2, bottom - int(cap / circ * 6), "%2d" % cap)
+            cv.put(lx + 2, bottom - int(cap / circ * prows), "%2d A" % cap)
         for i in range(nb):
             key = (now - datetime.timedelta(minutes=nb - 1 - i)).strftime("%Y-%m-%dT%H:%M")
             a = hist["amps"].get(key)
             if a:
-                column(lx + 5 + i, bottom, 6, a / circ, 1, T["fillbad"] if a > cap + 0.05 else T["fill"])
+                column(px + i, bottom, prows, a / circ, 1, T["fillbad"] if a > cap + 0.05 else T["fill"])
             else:
-                cv.put(lx + 5 + i, bottom, "_" if a is not None else " ")
-        cv.put(lx + 5, cy + 7, "-%dm" % nb)
-        cv.put(lx + 5 + nb - 3, cy + 7, "now")
+                cv.put(px + i, bottom, "_" if a is not None else " ")
+        cv.put(px, bottom + 1, "-%dm" % nb)
+        cv.put(px + nb - 3, bottom + 1, "now")
         for i in range(nb):                         # mark the minute the charge finished
             if done and (now - datetime.timedelta(minutes=nb - 1 - i)).strftime("%Y-%m-%dT%H:%M") == done["t"][:16]:
-                cv.put(lx + 5 + i, cy + 7, g["mark"], T["fill"])
+                cv.put(px + i, bottom + 1, g["mark"], T["fill"])
     else:
         cv.put(lx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
     # --- Chart: energy per day ------------------------------------------------------
-    cv.window(rx, cy, ww, chh, "Energy per day, kWh", T["win"], T["shadow"], g, single=single)
+    cv.window(rx, cy, ww, chh, "Energy per day", T["win"], T["shadow"], g, single=single, tight=S.get("tight", False))
     if hist and hist["days"]:
         days = hist["days"][-(chh - 2):]
         top = max([k for _, k in days if k] or [1.0])
-        dbw, tbg = iw - 9, T["trough"][1]
+        dbw, tbg = iw - 13, T["trough"][1]
         for i, (label, kwh) in enumerate(days):                 # one horizontal bar per day
             y = cy + 1 + i
             cv.put(rx + 2, y, "%-2s" % label)
             cv.put(rx + 5, y, g["empty"] * dbw, T["trough"][0], tbg)
             if kwh is None:
-                cv.put(rx + 6 + dbw, y, "    -")
+                cv.put(rx + 6 + dbw, y, "    -")            # no reading that day
                 continue
             eighths = int(round(kwh / top * dbw * 8))
             if kwh > 0 and eighths == 0:
@@ -1530,12 +1551,12 @@ def _compose(st, age, events, g, size=(80, 32), hint="", theme="turbo", hist=Non
                 cv.put(rx + 5 + full, y, g["hpart"][part - 1], T["fill"], tbg)
             elif part >= 4:
                 cv.put(rx + 5 + full, y, g["full"], T["fill"], tbg)
-            cv.put(rx + 6 + dbw, y, "%5.1f" % kwh)
+            cv.put(rx + 6 + dbw, y, "%5.1f kWh" % kwh)
     else:
         cv.put(rx + 2, cy + 1, _clip("no telemetry.log to chart", iw))
 
     # --- Event log ------------------------------------------------------------------
-    cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g, single=single)
+    cv.window(lx, by, fw, bh, "Event log", T["log"], T["shadow"], g, single=single, tight=S.get("tight", False))
     n = max(0, min(events, bh - 2)) if events else 0
     for i, e in enumerate(st["events"][-n:] if n else []):
         cv.put(lx + 2, by + 1 + i, str(e["t"])[:19].replace("T", " "), T["logtime"])
@@ -1567,7 +1588,13 @@ def _dashboard(st, age, events, color=False, size=(80, 32), ascii_only=False, hi
 #         function-key bar.
 #   mono  one-hue screens: reverse video for selection, a brighter cell for hot letters,
 #         "< OK >" buttons, "F10=Menu" status items.
-_FAMILY = {"commander": "nc", "phosphor": "mono", "amber": "mono", "mono": "mono"}      # others: tv
+#   vb    Visual Basic for MS-DOS 1.0 (screenshots of the product and its ControlPanel defaults):
+#         no highlighted letters on the menu bar, black selection bars with white access letters,
+#         a title bar set into the main window's frame, frameless dialogs under a title strip,
+#         3-D buttons (white top and left edge, black bottom and right; double-lined with a
+#         reversed caption when focused), a sunken input box, "F1=Help | ..." on a cyan status
+#         line that also carries the clock.
+_FAMILY = {"commander": "nc", "phosphor": "mono", "amber": "mono", "mono": "mono", "vbdos": "vb"}  # others: tv
 
 
 def _style(name):
@@ -1582,6 +1609,13 @@ def _style(name):
                     dlg=(30, 47), frame=(97, 47), icon=(92, 47), err=None, errfocus=None, errhot=None,
                     btn=(30, 42), btnhot=(93, 42), focus=(97, 42), focushot=(93, 42),
                     input=(97, 44), inputsel=(97, 42))
+    if fam == "vb":
+        return dict(family=fam, buttons="vb", status="vb", closebox=False, single=True,
+                    barhot=bar, barselhot=(37, 40), menu=bar, menuhot=(97, 47), sel=(37, 40), selhot=(97, 40),
+                    dlg=(30, 47), frame=(30, 47), icon=None, err=None, errfocus=None, errhot=None,
+                    btn=(30, 47), btnhot=(97, 47), focus=(37, 40), focushot=(97, 40),
+                    input=(30, 47), inputsel=(37, 40),
+                    statusbar=(30, 46), titlebar=(97, 45), tight=True)
     if fam == "nc":
         return dict(family=fam, buttons="far", status="fn", closebox=False, single=False,
                     barhot=(93, bar[1]), menu=(97, 46), menuhot=(93, 46), sel=(97, 40), selhot=(93, 40),
@@ -1682,22 +1716,23 @@ def _read_keys():
 class _Ui:
     """State of the menu bar, the open menu and the open dialog; draws them over a _Canvas."""
     SAY_FOR = 4.0             # s a result stays on the status line
-    FN = {"f1": "about", "f2": "limit", "f8": "faults"}       # function keys, as the nc key bar shows
+    FN = {"f1": "help", "f2": "limit", "f8": "faults"}        # function keys, as the nc key bar shows
 
     def __init__(self, data_dir, theme, can_quit=True, clock=time.monotonic):
         self.data_dir, self.theme, self.clock, self.can_quit = data_dir, theme, clock, can_quit
         # Items: (label, index of its hot letter, key shown at the right, action, status-line hint)
-        system = [("About OpenJuice...", 0, "F1", "about", "What this screen is")]
-        if can_quit:
-            system += [None, ("Exit", 1, "Alt-X", "quit", "Leave the status screen")]
         charger = [("Set current limit...", 12, "F2", "limit", "Change the current limit"),
                    ("Clear fault log...", 6, "F8", "faults", "Clear the module's fault log")]
+        if can_quit:
+            charger += [None, ("Exit", 1, "Alt-X", "quit", "Leave the status screen")]
+        help_ = [("Gauges...", 0, "F1", "help", "What each gauge shows"),
+                 ("About OpenJuice...", 0, "", "about", "What this screen is")]
         themes, used = [], set()
         for n in THEME_ORDER:
             hot = next(i for i, c in enumerate(n) if c not in used)
             used.add(n[hot])
             themes.append((n, hot, "", "theme:" + n, "Switch to the %s theme" % n))
-        self.menus = [("≡", -1, system), ("Charger", 0, charger), ("Theme", 0, themes)]
+        self.menus = [("Charger", 0, charger), ("Theme", 0, themes), ("Help", 0, help_)]
         self.menu = None          # index of the highlighted menu title
         self.opened = False       # whether its pull-down is showing
         self.item = 0
@@ -1736,7 +1771,7 @@ class _Ui:
         if self.menu is not None:
             return self._menu_key(k)
         if k in ("f10", "f9", "m"):
-            self._open(1, show=False)                 # highlights the first named menu; Enter opens it
+            self._open(0, show=False)                 # highlights the first menu; Enter opens it
         elif k.startswith("alt+") and self._title(k[4:]) is not None:
             self._open(self._title(k[4:]))
         elif k == "alt+x" or k == "q":
@@ -1805,6 +1840,22 @@ class _Ui:
         elif action.startswith("theme:"):
             self.theme = action[6:]
             save_theme(self.data_dir, self.theme)
+        elif action == "help":                      # the same wording as the monitor's
+            self._info("Gauges", ["Current  Amps going to the vehicle now. The scale is the circuit",
+                                  "         rating; the tick is the maximum charging rate in force.",
+                                  "Volts    Supply voltage at the charger. Red outside 210 to 255 V.",
+                                  "Power    Charger power in kW: amps times volts.",
+                                  "Temp     Temperature inside the charger. Red above 60 C.",
+                                  "Faults   Crashes logged by the charger's WiFi module. At 8 it",
+                                  "         enters Safe Mode; this helper stops taking control at 6",
+                                  "         (the tick). Clear the log from the Charger menu.",
+                                  "Reboots  Times in 24 hours this helper rebooted the WiFi module",
+                                  "         to recover it. The helper allows itself 4 a day.",
+                                  "Fixes    Times in 24 hours this helper put the maximum charging",
+                                  "         rate back after the charger reported a different one.",
+                                  "         The helper allows itself 12 a day, because each one",
+                                  "         is written to the charger's memory.",
+                                  "Signal   WiFi signal at the charger. Red below -75 dBm."])
         elif action == "about":
             self._info("About", ["OpenJuice status screen", "JuiceBox Gen 1 under local control",
                                  "Helper %s" % VERSION])
@@ -1894,18 +1945,32 @@ class _Ui:
     # -- drawing --
     def _status(self, cv, g, S, bar):
         W, y = cv.w, cv.h - 1
+        bar = S.get("statusbar") or bar
         cv.fill(0, y, W, 1, " ", *bar)
         note = ""                                   # the highlighted menu item's hint
         if self.menu is not None and self.opened and self.menus[self.menu][2][self.item]:
             note = self.menus[self.menu][2][self.item][4]
-        elif self.said and self.clock() < self.said_until:
+        if S["status"] == "vb":                      # F1=Help | what the keys do now | clock
+            if not note and self.said and self.clock() < self.said_until:
+                note = self.said
+            elif not note and self.dialog:
+                note = "Enter=Execute   Esc=Cancel   Tab=Next Field"
+            elif not note:
+                note = "F10=Menu   L=Limit   F=Faults   T=Theme" + ("   Alt+X=Exit" if self.can_quit else "")
+            cv.put(1, y, "F1=Help")
+            cv.put(9, y, g["sep"])
+            cv.put(11, y, _clip(note, W - 34))
+            cv.put(W - 22, y, g["sep"])
+            cv.put(W - 20, y, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            return
+        if not note and self.said and self.clock() < self.said_until:
             cv.put(1, y, _clip(self.said, W - 2))    # a result takes the whole line for a few seconds
             return
         if S["status"] == "fn":                      # ten numbered cells; unbound keys stay blank
             if note:
                 cv.put(1, y, _clip(note, W - 2))
                 return
-            labels = {1: "About", 2: "Limit", 5: "Theme", 8: "Faults", 9: "Menu", 10: "Menu"}
+            labels = {1: "Help", 2: "Limit", 5: "Theme", 8: "Faults", 9: "Menu", 10: "Menu"}
             cell = W // 10
             for i in range(10):
                 cv.put(i * cell, y, "%2d" % (i + 1), 37, 40)
@@ -1932,15 +1997,16 @@ class _Ui:
         S = _style(self.theme)
         bar = T["bar"]
         W, H = cv.w, cv.h
-        cv.fill(0, 0, max(0, W - 21), 1, " ", *bar)             # menu bar, left of the clock
+        clock_below = S["status"] == "vb"                       # that style keeps the clock on the status line
+        cv.fill(0, 0, W if clock_below else max(0, W - 21), 1, " ", *bar)      # menu bar, left of the clock
         x, xs = 1, []
         for i, (title, hot, _) in enumerate(self.menus):
-            shown = g["sys"] if hot < 0 else title
+            shown = title
             xs.append(x)
             if i == self.menu:
                 cv.put(x, 0, " %s " % shown, *S["sel"])
                 if hot >= 0:
-                    cv.put(x + 1 + hot, 0, shown[hot], *S["selhot"])
+                    cv.put(x + 1 + hot, 0, shown[hot], *S.get("barselhot", S["selhot"]))
             else:
                 cv.put(x + 1, 0, shown)
                 if hot >= 0:
@@ -1953,8 +2019,9 @@ class _Ui:
             mark = self.menus[self.menu][0] == "Theme"
             inner = max(len(it[0]) + (len(it[2]) + 2 if it[2] else 0) for it in items if it) + 2 + (2 if mark else 0)
             mx, my, mw, mh = xs[self.menu] - 1, 1, inner + 4, len(items) + 2     # a blank column outside the frame
-            cv.shade(mx + 2, my + 1, mw, mh, *T["shadow"])
-            cv.fill(mx, my, mw, mh, " ", *S["menu"])
+            edge = 1 if S.get("tight") else 0        # ...except where the frame is the edge of the box
+            cv.shade(mx + 2 + edge, my + 1, mw - 2 * edge, mh, *T["shadow"])
+            cv.fill(mx + edge, my, mw - 2 * edge, mh, " ", *S["menu"])
             cv.put(mx + 1, my, g["stl"] + g["sh"] * inner + g["str"])
             cv.put(mx + 1, my + mh - 1, g["sbl"] + g["sh"] * inner + g["sbr"])
             for i, it in enumerate(items):
@@ -1975,7 +2042,9 @@ class _Ui:
                     cv.put(mx + 3 + len(lead) + it[1], y, it[0][it[1]], *(S["selhot"] if chosen else S["menuhot"]))
 
         d = self.dialog
-        if d:
+        if d and S["buttons"] == "vb":
+            self._dialog_vb(cv, g, T, S, d)
+        elif d:
             err = d["tone"] == "err" and S["err"]
             body = S["err"] if err else S["dlg"]
             frame = S["err"] if err else S["frame"]
@@ -2025,6 +2094,55 @@ class _Ui:
                     cv.put(x, y, "<", *S["btnhot"])        # the default button's brackets are bright
                     cv.put(x + len(text) - 1, y, ">", *S["btnhot"])
                 x += len(text) + 2
+
+    @staticmethod
+    def _box(cv, g, x, y, w, lit, dark, bg, double):
+        """A 3-row box whose top and left edges are one colour and its bottom and right another."""
+        hz, vt = (g["h"], g["v"]) if double else (g["sh"], g["sv"])
+        tl, tr, bl, br = ((g["tl"], g["tr"], g["bl"], g["br"]) if double
+                          else (g["stl"], g["str"], g["sbl"], g["sbr"]))
+        cv.put(x, y, tl + hz * (w - 2), lit, bg)
+        cv.put(x + w - 1, y, tr, dark, bg)
+        cv.put(x, y + 1, vt, lit, bg)
+        cv.put(x + 1, y + 1, " " * (w - 2), dark, bg)
+        cv.put(x + w - 1, y + 1, vt, dark, bg)
+        cv.put(x, y + 2, bl, lit, bg)
+        cv.put(x + 1, y + 2, hz * (w - 2) + br, dark, bg)
+
+    def _dialog_vb(self, cv, g, T, S, d):
+        """A VBDOS dialog: a frameless panel under a title strip, 3-D buttons, a sunken input box."""
+        W, H = cv.w, cv.h
+        body = S["dlg"]
+        names = {"confirm": ["Yes", "No"], "input": ["OK", "Cancel"], "info": ["OK"]}[d["kind"]]
+        lines = list(d["lines"])
+        dw = max([len(x) for x in lines] + [len(d["title"]) + 4, 30]) + 6
+        dh = len(lines) + (11 if d["kind"] == "input" else 7)
+        dx, dy = (W - dw) // 2, max(2, (H - dh) // 2 - 2)
+        cv.shade(dx + 2, dy + 1, dw, dh, *T["shadow"])
+        cv.fill(dx, dy, dw, dh, " ", *body)
+        cv.fill(dx, dy, dw, 1, " ", *S["titlebar"])
+        cv.put(dx + (dw - len(d["title"])) // 2, dy, d["title"])
+        for i, line in enumerate(lines):
+            cv.put(dx + 3, dy + 2 + i, line)
+        y = dy + 2 + len(lines)
+        if d["kind"] == "input":
+            self._box(cv, g, dx + 3, y, 8, body[0], 97, body[1], False)       # sunken: dark top and left
+            cv.put(dx + 5, y + 1, d["value"], *(S["inputsel"] if d["fresh"] else body))
+            if not d["fresh"]:
+                cv.put(dx + 5 + len(d["value"]), y + 1, " ", *S["inputsel"])   # a block cursor
+            cv.put(dx + 13, y + 1, _clip(d["error"], dw - 16))
+            y += 4
+        else:
+            y += 1
+        widths = [max(len(n) + 4, 8) for n in names]
+        x = dx + (dw - sum(widths) - 2 * (len(names) - 1)) // 2
+        for i, n in enumerate(names):
+            on = i == d["focus"]
+            self._box(cv, g, x, y, widths[i], 97, body[0], body[1], on)       # raised; double-lined with focus
+            at = x + 1 + (widths[i] - 2 - len(n)) // 2
+            cv.put(at, y + 1, n, *(S["focus"] if on else body))
+            cv.put(at, y + 1, n[0], *(S["focushot"] if on else S["btnhot"]))
+            x += widths[i] + 2
 
 
 def _watch(args, color, theme):

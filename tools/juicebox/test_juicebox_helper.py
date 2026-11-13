@@ -161,7 +161,7 @@ class TestScreenMenus(unittest.TestCase):
         return cv.render(False)
 
     def test_f10_highlights_the_bar_and_enter_opens_the_menu(self):
-        self.assertIn("=  Charger  Theme", self.text())
+        self.assertIn("Charger  Theme  Help", self.text())
         for key in ("f10", "f9", "m"):                       # F10 may not reach us in every terminal
             self.keys(key)
             self.assertTrue(self.ui.active, key)
@@ -179,9 +179,11 @@ class TestScreenMenus(unittest.TestCase):
         self.assertIn("commander", self.text())
         self.keys("alt+c")
         self.assertIn("Clear fault log...", self.text())
-        self.keys("left")
-        self.assertIn("About OpenJuice...", self.text())
         self.assertIn("Alt-X", self.text())
+        self.keys("left")                                    # wraps round to the last menu
+        self.assertIn("About OpenJuice...", self.text())
+        self.keys("alt+h")
+        self.assertIn("Gauges...", self.text())
 
     def test_letters_in_an_open_menu_mean_that_menu_only(self):
         self.keys("alt+t", "l")                              # "light", not the limit box
@@ -194,8 +196,8 @@ class TestScreenMenus(unittest.TestCase):
         self.assertEqual(self.ui.dialog["title"], "Clear fault log")
 
     def test_home_end_and_wrapping_skip_the_separator(self):
-        self.keys("f10", "left", "enter")                    # the system menu: About, rule, Exit
-        self.keys("down")
+        self.keys("f10", "enter")                            # the Charger menu: limit, faults, rule, Exit
+        self.keys("down", "down")
         self.assertEqual(self.ui.menus[0][2][self.ui.item][3], "quit")
         self.keys("down")
         self.assertEqual(self.ui.item, 0)
@@ -258,6 +260,16 @@ class TestScreenMenus(unittest.TestCase):
         self.keys("y", "enter")
         self.assertNotIn("clear_faults", self.cfg())
         self.assertIsNone(self.ui.dialog)
+
+    def test_f1_explains_the_gauges(self):
+        self.keys("f1")
+        text = self.text()
+        for word in ("Current", "Volts", "Power", "Temp", "Faults", "Reboots", "Fixes", "Signal"):
+            self.assertIn(word, text)
+        self.keys("enter")
+        self.assertIsNone(self.ui.dialog)
+        self.keys("f10", "left", "enter")                    # and it is the first item of the Help menu
+        self.assertIn("Gauges...", self.text())
 
     def test_theme_keys_and_quit(self):
         self.keys("alt+t", "down", "enter")
@@ -785,7 +797,7 @@ class TestStatusScreen(unittest.TestCase):
         hist = h.load_history(tmp)
         self.assertEqual(hist["amps"][now.strftime("%Y-%m-%dT%H:%M")], 31.7)
         self.assertEqual(hist["amps"][yesterday.strftime("%Y-%m-%dT%H:%M")], 25.7)   # peak of the minute
-        self.assertEqual(len(hist["days"]), 7)
+        self.assertEqual(len(hist["days"]), 8)
         self.assertAlmostEqual(hist["days"][-2][1], 10.0)          # yesterday's first frame to today's first
         self.assertAlmostEqual(hist["days"][-1][1], 0.0)           # today: nothing after its first frame
         text = h._dashboard(self.snapshot(), 2, 8, hist=hist)
@@ -807,7 +819,7 @@ class TestStatusScreen(unittest.TestCase):
         text = h._dashboard(self.snapshot(charge={"last_complete": done}, **idle), 2, 8, hist={"amps": {}, "days": []})
         self.assertIn("Session", h._dashboard(self.snapshot(charge={"last_complete": done}), 2, 8))   # while charging
         self.assertIn("Finished  %s  12.3 kWh" % now.strftime("%H:%M"), text)
-        self.assertIn("v", text.split("Current per minute")[1].split("\n")[7])     # marker on the time axis
+        self.assertIn("v", text.split("Current per minute")[1].split("\n")[8])     # marker on the time axis
         old = h._dashboard(self.snapshot(charge={"last_complete": {"t": "2026-01-01T07:42:10", "wh": None}}, **idle), 2, 8)
         self.assertIn("Finished  01-01 07:42", old)
         for st in (self.snapshot(**idle), self.snapshot(charge=None, **idle),
